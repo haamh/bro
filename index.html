@@ -516,8 +516,14 @@
         window.onload = async () => {
             try {
                 // Use provided __firebase_config and __app_id
-                firebaseConfigGlobal = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-                appIdGlobal = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                firebaseConfig = { // <<< Assign to module-scoped variable
+                    apiKey: "AIzaSyCPmT3kxQm4nqovB1eB5tWON2GCStcSzmg", // Replace with your actual API key
+                    authDomain: "sybau-2b8ae.firebaseapp.com",
+                    projectId: "sybau-2b8ae",
+                    storageBucket: "sybau-2b8ae.appspot.com", // Or .firebasestorage.app - check your console
+                    messagingSenderId: "973974019830",      // Replace with your actual Sender ID
+                    appId: "1:973974019830:web:2dfc448a43178aea6116d7" // Replace with your actual App ID
+                };
 
                 if (!firebaseConfigGlobal) {
                     showErrorMessage("Firebase configuration is missing. App cannot start.");
