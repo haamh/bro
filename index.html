@@ -77,8 +77,7 @@
         </p>
     </header>
 
-    <div class="p-4"> <!-- Main content wrapper that scrolls -->
-        <div id="errorMessage" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md my-4 hidden" role="alert">
+    <div class="p-4"> <div id="errorMessage" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md my-4 hidden" role="alert">
             <strong class="font-bold">Error:</strong>
             <span class="block sm:inline ml-2"></span>
         </div>
@@ -117,7 +116,6 @@
             </div>
         </div>
 
-        <!-- Call and Chat Area Container -->
         <div class="relative min-h-[50vh]">
             <div id="videoCallArea" class="absolute inset-0 p-4 hidden flex-col items-center justify-center bg-gray-800 rounded-lg z-10">
                 <div class="video-container w-full max-w-md">
@@ -146,7 +144,6 @@
             </div>
 
             <main id="messageArea" class="absolute inset-0 p-4 space-y-4">
-                <!-- Messages will be rendered here by JS -->
                 <div id="initialMessage" class="flex justify-center items-center h-full text-gray-500 text-base sm:text-lg italic text-center px-4">
                     <p>Start a secure conversation by entering a shared secret key and sending a message!</p>
                 </div>
@@ -192,6 +189,7 @@
         let currentCallType = 'video'; // Default call type
         let callStateUnsubscribe = null; // To manage Firestore listener for call state
         let makingOffer = false; // Flag to prevent renegotiation races
+        let processingRemoteSignal = false; // Flag to manage incoming signal processing
 
         // WebRTC configuration
         const rtcConfig = {
@@ -481,26 +479,55 @@
                     endCall(false); showErrorMessage("Call ended by other user.");
                 }
 
-                // Process offer ONLY if peerConnection is ready and it's for us
-                if (data.offer && data.offer.senderId !== userId && peerConnection && peerConnection.signalingState === 'stable') {
-                    console.log('Received offer. Current call type for processing:', currentCallType);
-                    if (!peerConnection) {
-                        console.warn("Received offer, but local peerConnection is not ready (user might not have clicked Join).");
-                        return; 
+                if (data.offer && data.offer.senderId !== userId && peerConnection) {
+                    if (processingRemoteSignal) {
+                        console.warn("Already processing a remote signal, ignoring new offer for now.");
+                        return;
                     }
+                    processingRemoteSignal = true;
+                    console.log(`Processing received offer. Current signalingState: ${peerConnection.signalingState}`);
                     
-                    peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer)).then(async () => {
-                        const answer = await peerConnection.createAnswer();
-                        await peerConnection.setLocalDescription(answer);
-                        await setDoc(callStateRef, { answer: { sdp: answer.sdp, type: answer.type, senderId: userId }, status: 'active' }, { merge: true });
-                        callStatus.textContent = 'Answering call...';
-                        joinCallButton.classList.add('hidden'); 
-                        hangUpButton.classList.remove('hidden');
-                    }).catch(e => console.error("Error processing offer:", e, "Signaling state:", peerConnection?.signalingState));
+                    peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
+                        .then(async () => {
+                            console.log(`Remote description (offer) set. SignalingState after SRD: ${peerConnection.signalingState}`);
+                            if (peerConnection.signalingState === "have-remote-offer") {
+                                const answer = await peerConnection.createAnswer();
+                                console.log("Answer created. SignalingState before SLD (answer):", peerConnection.signalingState);
+                                if (peerConnection.signalingState === "have-remote-offer") { // Re-check state
+                                    await peerConnection.setLocalDescription(answer);
+                                    console.log(`Local description (answer) set. SignalingState after SLD: ${peerConnection.signalingState}`);
+                                    await setDoc(callStateRef, { answer: { sdp: answer.sdp, type: answer.type, senderId: userId }, status: 'active' }, { merge: true });
+                                    callStatus.textContent = 'Call active.'; 
+                                    joinCallButton.classList.add('hidden'); 
+                                    hangUpButton.classList.remove('hidden');
+                                } else {
+                                     console.error(`Cannot set local answer. State is ${peerConnection.signalingState}, not have-remote-offer (checked just before SLD).`);
+                                }
+                            } else {
+                                console.error(`Cannot create answer. SignalingState is ${peerConnection.signalingState}, expected have-remote-offer (checked after SRD).`);
+                            }
+                        })
+                        .catch(e => {
+                            console.error("Error processing offer (setRemoteDescription or subsequent ops):", e, "Signaling state at catch:", peerConnection?.signalingState);
+                        })
+                        .finally(() => {
+                            processingRemoteSignal = false;
+                        });
                 } else if (data.answer && data.answer.senderId !== userId && peerConnection && peerConnection.signalingState === 'have-local-offer') {
+                     if (processingRemoteSignal) {
+                        console.warn("Already processing a remote signal, ignoring new answer for now."); // Should not happen if states are managed well
+                        return;
+                    }
+                    processingRemoteSignal = true;
                     peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
-                        .then(() => callStatus.textContent = 'Call connected!')
-                        .catch(e => console.error("Error processing answer:", e, "Signaling state:", peerConnection?.signalingState));
+                        .then(() => { 
+                            callStatus.textContent = 'Call connected!';
+                            console.log(`Remote description (answer) set. SignalingState after SRD (answer): ${peerConnection.signalingState}`);
+                        })
+                        .catch(e => console.error("Error processing answer:", e, "Signaling state:", peerConnection?.signalingState))
+                        .finally(() => {
+                            processingRemoteSignal = false;
+                        });
                 }
                 if (data.trackStatus && data.trackStatus.senderId !== userId) { 
                     remoteMicStatus.classList.toggle('hidden', data.trackStatus.audio);
@@ -584,8 +611,8 @@
             peerConnection.ontrack = (event) => { if (remoteVideo.srcObject !== event.streams[0]) { remoteVideo.srcObject = event.streams[0]; callStatus.textContent = 'Connected!'; } };
             
             peerConnection.onnegotiationneeded = async () => {
-                if (makingOffer || !peerConnection || peerConnection.signalingState !== 'stable' || !callRoomId) {
-                    console.log("onnegotiationneeded: skipped. makingOffer:", makingOffer, "signalingState:", peerConnection?.signalingState, "callRoomId:", callRoomId);
+                if (makingOffer || processingRemoteSignal || !peerConnection || peerConnection.signalingState !== 'stable' || !callRoomId) {
+                    console.log("onnegotiationneeded: skipped. makingOffer:", makingOffer, "processingRemoteSignal:", processingRemoteSignal, "signalingState:", peerConnection?.signalingState, "callRoomId:", callRoomId);
                     return;
                 }
             
@@ -596,9 +623,9 @@
                     const offer = await peerConnection.createOffer();
                     console.log("onnegotiationneeded: Offer created. SDP (first 100 chars):", offer.sdp.substring(0,100) + "...");
             
-                    if (peerConnection.signalingState !== 'stable') { // Re-check state before setting
+                    if (peerConnection.signalingState !== 'stable') { 
                         console.warn("onnegotiationneeded: Signaling state changed to", peerConnection.signalingState, "before setLocalDescription. Aborting this attempt.");
-                        makingOffer = false; // Reset flag if aborting
+                        makingOffer = false; 
                         return;
                     }
             
@@ -729,7 +756,6 @@
                      return;
                 }
                 console.log("Peer connection set up for joining call. Waiting for offer/answer via Firestore.");
-                // The onSnapshot for callStateRef will handle offer/answer processing.
             } catch (error) {
                 console.error("Error during join call (setup or getDoc):", error);
                 if (!videoCallArea.classList.contains('hidden')) {
@@ -742,6 +768,9 @@
             if (remoteVideo.srcObject) { remoteVideo.srcObject.getTracks().forEach(t => t.stop()); remoteVideo.srcObject = null; }
             if (peerConnection) { try {peerConnection.close();} catch(e){console.warn("Error closing PC in endCall:", e);} peerConnection = null; }
             
+            makingOffer = false; // Reset negotiation flags
+            processingRemoteSignal = false;
+
             if (isInitiator && db && callRoomId) {
                 const path = getCallDocPath(callRoomId);
                 if (path) await deleteDoc(doc(db, path)).catch(e => console.error("Call doc delete error:", e));
