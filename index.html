@@ -434,7 +434,14 @@
         // --- Firebase Initialization and Auth Listener ---
         window.onload = async () => {
             try {
-                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+                const firebaseConfig = {
+  apiKey: "AIzaSyBjujYRu-xtSLERA5V3phA8mug8-D4NGvg",
+  authDomain: "fir-ae868.firebaseapp.com",
+  projectId: "fir-ae868",
+  storageBucket: "fir-ae868.firebasestorage.app",
+  messagingSenderId: "828463316147",
+  appId: "1:828463316147:web:8b3d02a3e9357aafe0c4c6"
+};
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
