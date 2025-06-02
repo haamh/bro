@@ -77,7 +77,7 @@
         </p>
     </header>
 
-    <div class="p-4">
+    <div class="p-4"> <!-- Main content wrapper that scrolls -->
         <div id="errorMessage" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md my-4 hidden" role="alert">
             <strong class="font-bold">Error:</strong>
             <span class="block sm:inline ml-2"></span>
@@ -117,6 +117,7 @@
             </div>
         </div>
 
+        <!-- Call and Chat Area Container -->
         <div class="relative min-h-[50vh]">
             <div id="videoCallArea" class="absolute inset-0 p-4 hidden flex-col items-center justify-center bg-gray-800 rounded-lg z-10">
                 <div class="video-container w-full max-w-md">
@@ -145,6 +146,7 @@
             </div>
 
             <main id="messageArea" class="absolute inset-0 p-4 space-y-4">
+                <!-- Messages will be rendered here by JS -->
                 <div id="initialMessage" class="flex justify-center items-center h-full text-gray-500 text-base sm:text-lg italic text-center px-4">
                     <p>Start a secure conversation by entering a shared secret key and sending a message!</p>
                 </div>
@@ -167,14 +169,16 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-auth.js"; // Removed signInWithCustomToken as it wasn't used
-        import { getFirestore, collection, doc, addDoc, onSnapshot, serverTimestamp, query, setDoc, deleteDoc, getDocs, getDoc } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-firestore.js"; // Added getDoc
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, onSnapshot, serverTimestamp, query, setDoc, deleteDoc, getDocs, getDoc } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-firestore.js";
 
+        // Firebase app instances and config - module-scoped
         let app;
         let db;
         let auth;
-        let firebaseConfig; // <<< Declare here to make it module-scoped
+        let firebaseConfig; // Will be assigned in window.onload
 
+        // Application state variables
         let userId = null;
         let derivedKey = null;
         let messages = [];
@@ -185,11 +189,18 @@
         let currentCameraDeviceId = null;
         let isVideoActive = true;
         let isAudioActive = true;
-        let currentCallType = 'video';
-        let callStateUnsubscribe = null;
+        let currentCallType = 'video'; // Default call type
+        let callStateUnsubscribe = null; // To manage Firestore listener for call state
 
-        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+        // WebRTC configuration
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+            ],
+        };
 
+        // DOM Element references
         const userIdDisplay = document.getElementById('userIdDisplay');
         const userIdSpan = userIdDisplay.querySelector('span');
         const errorMessageDiv = document.getElementById('errorMessage');
@@ -220,47 +231,47 @@
         const remoteMicStatus = document.getElementById('remoteMicStatus');
         const remoteCamStatus = document.getElementById('remoteCamStatus');
 
-        const arrayBufferToBase64 = (buffer) => { /* ... unchanged ... */ };
-        const base64ToArrayBuffer = (base64) => { /* ... unchanged ... */ };
-        const showErrorMessage = (message) => { /* ... unchanged (with auto-hide) ... */ };
-        const hideErrorMessage = () => { /* ... unchanged ... */ };
+        // Helper functions for Base64 conversion
+        const arrayBufferToBase64 = (buffer) => {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+            return btoa(binary);
+        };
+        const base64ToArrayBuffer = (base64) => {
+            const binary_string = atob(base64);
+            const bytes = new Uint8Array(binary_string.length);
+            for (let i = 0; i < binary_string.length; i++) bytes[i] = binary_string.charCodeAt(i);
+            return bytes.buffer;
+        };
+
+        // UI Helper: Show/Hide Error Messages
+        const showErrorMessage = (message) => {
+            errorMessageSpan.textContent = message;
+            errorMessageDiv.classList.remove('hidden');
+            setTimeout(() => {
+                if (errorMessageSpan.textContent === message) hideErrorMessage();
+            }, 5000);
+        };
+        const hideErrorMessage = () => {
+            errorMessageDiv.classList.add('hidden');
+            errorMessageSpan.textContent = '';
+        };
         
-        // --- START REPLACEMENT: Path construction helpers ---
+        // Path construction helpers using module-scoped firebaseConfig
         const getArtifactsBasePath = () => {
             if (!firebaseConfig || !firebaseConfig.projectId) {
-                console.error("Firebase config not initialized for path construction.");
-                return null; 
+                console.error("Firebase config not ready for path construction."); return null; 
             }
             return `artifacts/${firebaseConfig.projectId}/public/data`;
         };
+        const getMessagesColPath = () => { const basePath = getArtifactsBasePath(); return basePath ? `${basePath}/chat_messages` : null; };
+        const getPresenceColPath = () => { const basePath = getArtifactsBasePath(); return basePath ? `${basePath}/presence` : null; };
+        const getPresenceDocPath = (currentUserId) => { const basePath = getArtifactsBasePath(); return basePath && currentUserId ? `${basePath}/presence/${currentUserId}` : null; };
+        const getCallDocPath = (currentCallRoomId) => { const basePath = getArtifactsBasePath(); return basePath && currentCallRoomId ? `${basePath}/calls/${currentCallRoomId}` : null; };
+        const getCallCandidatesColPath = (currentCallRoomId) => { const callDocP = getCallDocPath(currentCallRoomId); return callDocP ? `${callDocP}/candidates` : null; };
 
-        const getMessagesColPath = () => {
-            const basePath = getArtifactsBasePath();
-            return basePath ? `${basePath}/chat_messages` : null;
-        };
-        const getPresenceColPath = () => {
-            const basePath = getArtifactsBasePath();
-            return basePath ? `${basePath}/presence` : null;
-        };
-        const getPresenceDocPath = (currentUserId) => {
-            const basePath = getArtifactsBasePath();
-            return basePath && currentUserId ? `${basePath}/presence/${currentUserId}` : null;
-        };
-        const getCallsColPath = () => { // For candidates subcollection
-            const basePath = getArtifactsBasePath();
-            return basePath ? `${basePath}/calls` : null;
-        };
-        const getCallDocPath = (currentCallRoomId) => {
-            const basePath = getArtifactsBasePath();
-            return basePath && currentCallRoomId ? `${basePath}/calls/${currentCallRoomId}` : null;
-        };
-        const getCallCandidatesColPath = (currentCallRoomId) => {
-            const callDoc = getCallDocPath(currentCallRoomId);
-            return callDoc ? `${callDoc}/candidates` : null;
-        };
-        // --- END REPLACEMENT: Path construction helpers ---
-
-
+        // Cryptography: Derive Key, Encrypt, Decrypt
         const deriveEncryptionKey = async (secret) => {
             if (!secret) {
                 derivedKey = null; callRoomId = null;
@@ -284,7 +295,7 @@
                 startPresenceUpdates();
             } catch (error) {
                 console.error("Error deriving key:", error);
-                showErrorMessage("Failed to derive encryption key.");
+                showErrorMessage("Failed to derive encryption key. Check secret or console.");
                 derivedKey = null; callRoomId = null;
                 messageInput.disabled = true; sendButton.disabled = true;
                 startAudioCallButton.disabled = true; startVideoCallButton.disabled = true;
@@ -292,66 +303,162 @@
                 stopPresenceUpdates();
             }
         };
+        const autoDecryptMessages = async () => {
+            if (!derivedKey) return;
+            const newMessages = await Promise.all(messages.map(async (msg) => {
+                const contentToDecrypt = msg.type === 'media' ? msg.encryptedContent : msg.encryptedText;
+                if (contentToDecrypt && msg.iv && !msg.isDecrypted) {
+                    try {
+                        const decryptedContent = await decryptMessage(contentToDecrypt, msg.iv);
+                        return { ...msg, decryptedText: decryptedContent, isDecrypted: true, decryptionError: null };
+                    } catch (error) {
+                        return { ...msg, decryptedText: null, isDecrypted: false, decryptionError: error.message };
+                    }
+                }
+                return msg;
+            }));
+            messages = newMessages;
+            renderMessages();
+        };
+        const encryptMessage = async (text) => {
+            if (!derivedKey) { showErrorMessage("Encryption key not ready."); throw new Error("Encryption key not ready."); }
+            try {
+                const enc = new TextEncoder(); const encoded = enc.encode(text);
+                const iv = window.crypto.getRandomValues(new Uint8Array(12));
+                const ciphertext = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, derivedKey, encoded);
+                return { encryptedText: arrayBufferToBase64(ciphertext), iv: arrayBufferToBase64(iv) };
+            } catch (error) { console.error("Encryption failed:", error); showErrorMessage("Failed to encrypt message."); throw error; }
+        };
+        const decryptMessage = async (encryptedData, ivBase64) => {
+            if (!derivedKey) { showErrorMessage("Decryption key not ready."); throw new Error("Decryption key not ready."); }
+            try {
+                const ciphertext = base64ToArrayBuffer(encryptedData); const iv = base64ToArrayBuffer(ivBase64);
+                const decrypted = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, derivedKey, ciphertext);
+                return new TextDecoder().decode(decrypted);
+            } catch (error) { console.error("Decryption failed:", error); throw new Error("Decryption failed. Incorrect key or corrupted message."); }
+        };
         
-        const autoDecryptMessages = async () => { /* ... unchanged ... */ };
-        const encryptMessage = async (text) => { /* ... unchanged ... */ };
-        const decryptMessage = async (encryptedData, ivBase64) => { /* ... unchanged ... */ };
-        const renderMessages = () => { /* ... unchanged ... */ };
+        // UI: Render Messages
+        const renderMessages = () => {
+            messageArea.innerHTML = ''; 
+            if (messages.length === 0) {
+                initialMessageDiv.classList.remove('hidden'); messageArea.appendChild(initialMessageDiv); return;
+            } else {
+                initialMessageDiv.classList.add('hidden');
+            }
+            messages.forEach(msg => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `flex ${msg.senderId === userId ? 'justify-end' : 'justify-start'}`;
+                const contentDiv = document.createElement('div');
+                contentDiv.className = `max-w-[80%] p-3 rounded-xl shadow-lg flex flex-col ${msg.senderId === userId ? 'bg-purple-500 text-white rounded-br-none' : 'bg-white text-gray-800 rounded-bl-none'}`;
+                const senderSpan = document.createElement('span');
+                senderSpan.className = 'text-xs opacity-80 mb-1';
+                senderSpan.textContent = msg.senderId === userId ? 'You' : `User: ${msg.senderId.substring(0, 8)}...`;
+                contentDiv.appendChild(senderSpan);
 
+                if (msg.type === 'media' && msg.encryptedContent && msg.iv) {
+                    if (msg.isDecrypted && msg.decryptedText) {
+                        let mediaElement;
+                        if (msg.mediaType === 'image') { mediaElement = document.createElement('img'); mediaElement.src = msg.decryptedText; }
+                        else if (msg.mediaType === 'video') { mediaElement = document.createElement('video'); mediaElement.src = msg.decryptedText; mediaElement.controls = true; mediaElement.autoplay = true; }
+                        else if (msg.mediaType === 'audio') { mediaElement = document.createElement('audio'); mediaElement.src = msg.decryptedText; mediaElement.controls = true; }
+                        if (mediaElement) { mediaElement.className = 'max-w-full h-auto rounded-md'; contentDiv.appendChild(mediaElement); }
+                    } else {
+                        const encryptedP = document.createElement('p'); encryptedP.className = 'text-sm italic text-gray-400 break-words';
+                        encryptedP.textContent = `Encrypted ${msg.mediaType} (${msg.fileName || 'unknown'})...`; contentDiv.appendChild(encryptedP);
+                        if (msg.decryptionError) { const errorP = document.createElement('p'); errorP.className = 'text-xs text-red-300 mt-1'; errorP.textContent = `Error: ${msg.decryptionError}`; contentDiv.appendChild(errorP); }
+                    }
+                } else if (msg.encryptedText && msg.iv) {
+                    if (msg.isDecrypted && msg.decryptedText) { const decryptedP = document.createElement('p'); decryptedP.className = 'text-sm break-words'; decryptedP.textContent = msg.decryptedText; contentDiv.appendChild(decryptedP); }
+                    else {
+                        const encryptedP = document.createElement('p'); encryptedP.className = 'text-sm italic text-gray-400 break-words';
+                        encryptedP.textContent = `Encrypted: ${msg.encryptedText.substring(0,30)}...`; contentDiv.appendChild(encryptedP);
+                        if (msg.decryptionError) { const errorP = document.createElement('p'); errorP.className = 'text-xs text-red-300 mt-1'; errorP.textContent = `Error: ${msg.decryptionError}`; contentDiv.appendChild(errorP); }
+                    }
+                }
+                const timestampSpan = document.createElement('span'); timestampSpan.className = 'text-xs opacity-75 mt-1 block text-right';
+                if (msg.timestamp?.toDate) timestampSpan.textContent = msg.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                else if (msg.timestamp) timestampSpan.textContent = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                contentDiv.appendChild(timestampSpan); messageDiv.appendChild(contentDiv); messageArea.appendChild(messageDiv);
+            });
+            messageArea.scrollTop = messageArea.scrollHeight;
+        };
+
+        // Firebase: Initialization & Listeners
         window.onload = async () => {
             try {
-                firebaseConfig = { // <<< Assign to module-scoped variable
-                    apiKey: "AIzaSyCPmT3kxQm4nqovB1eB5tWON2GCStcSzmg", // Replace with your actual API key
+                firebaseConfig = { 
+                    apiKey: "AIzaSyCPmT3kxQm4nqovB1eB5tWON2GCStcSzmg", 
                     authDomain: "sybau-2b8ae.firebaseapp.com",
                     projectId: "sybau-2b8ae",
-                    storageBucket: "sybau-2b8ae.appspot.com", // Or .firebasestorage.app - check your console
-                    messagingSenderId: "973974019830",      // Replace with your actual Sender ID
-                    appId: "1:973974019830:web:2dfc448a43178aea6116d7" // Replace with your actual App ID
+                    storageBucket: "sybau-2b8ae.appspot.com", 
+                    messagingSenderId: "973974019830",      
+                    appId: "1:973974019830:web:2dfc448a43178aea6116d7" 
                 };
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
 
                 onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        userId = user.uid;
-                    } else {
-                        await signInAnonymously(auth).catch(err => {
-                            console.error("Anonymous sign-in failed:", err);
-                            showErrorMessage("Authentication failed. Please refresh.");
-                        });
+                    if (user) { userId = user.uid; } 
+                    else { 
+                        try {
+                            await signInAnonymously(auth);
+                        } catch (err) {
+                             console.error("Anonymous sign-in failed:", err); showErrorMessage("Authentication failed. Please refresh.");
+                        }
                     }
+                    
                     if (userId) {
-                        userIdSpan.textContent = userId;
-                        userIdDisplay.classList.remove('hidden');
-
+                        userIdSpan.textContent = userId; userIdDisplay.classList.remove('hidden');
                         const messagesPath = getMessagesColPath();
                         if (messagesPath) {
-                            const messagesQuery = query(collection(db, messagesPath));
-                            onSnapshot(messagesQuery, (snapshot) => { /* ... */ }, (error) => { /* ... */ });
+                            onSnapshot(query(collection(db, messagesPath)), (snapshot) => {
+                                const fetched = snapshot.docs.map(d => ({ id: d.id, ...d.data(), decryptedText: null, isDecrypted: false, decryptionError: null }));
+                                fetched.sort((a, b) => (a.timestamp?.toDate()||0) - (b.timestamp?.toDate()||0));
+                                messages = fetched; renderMessages(); autoDecryptMessages();
+                            }, (error) => { console.error("Msg fetch error:", error); showErrorMessage("Msg fetch failed."); });
+                        } else {
+                            console.error("Messages collection path could not be determined.");
                         }
-
                         const presencePath = getPresenceColPath();
                         if (presencePath) {
-                            onSnapshot(query(collection(db, presencePath)), (snapshot) => { /* ... */ }, (error) => { /* ... */ });
+                            onSnapshot(query(collection(db, presencePath)), (snapshot) => {
+                                if (!callRoomId) return;
+                                const now = Date.now();
+                                const activeUsers = snapshot.docs.filter(d => d.data().lastSeen && (now - d.data().lastSeen.toDate().getTime() < 30000) && d.data().roomId === callRoomId).map(d => d.id);
+                                connectedUsersList.innerHTML = '';
+                                if (activeUsers.length === 0) {
+                                    connectedUsersList.innerHTML = '<span class="text-gray-400 italic">None yet...</span>';
+                                    startAudioCallButton.disabled = true; startVideoCallButton.disabled = true;
+                                } else {
+                                    activeUsers.forEach(id => { 
+                                        const userSpan = document.createElement('span');
+                                        userSpan.className = `bg-purple-200 text-purple-800 px-2 py-1 rounded-full text-xs ${id === userId ? 'font-bold' : ''}`;
+                                        userSpan.textContent = id === userId ? 'You' : `User: ${id.substring(0, 8)}...`;
+                                        connectedUsersList.appendChild(userSpan);
+                                    });
+                                    const otherUsersPresent = activeUsers.some(id => id !== userId);
+                                    startAudioCallButton.disabled = !otherUsersPresent; startVideoCallButton.disabled = !otherUsersPresent;
+                                }
+                            }, (error) => { console.error("Presence error:", error); });
+                        } else {
+                            console.error("Presence collection path could not be determined.");
                         }
                     }
                 });
-            } catch (error) {
-                console.error("Error initializing Firebase:", error);
-                showErrorMessage("Failed to initialize app. Check Firebase config.");
-            }
+            } catch (error) { console.error("Firebase init error:", error); showErrorMessage("App init failed. Check config."); }
         };
         
         function initializeCallListeners() {
             if (callStateUnsubscribe) callStateUnsubscribe();
-            if (!callRoomId || !db) return;
+            if (!callRoomId || !db) { console.warn("CallRoomId or DB not ready for call listeners."); return; }
 
-            const path = getCallDocPath(callRoomId);
-            if (!path) { console.error("Could not get call document path."); return; }
-            const callStateRef = doc(db, path);
+            const callDocP = getCallDocPath(callRoomId);
+            if (!callDocP) { console.error("Could not get call document path for listener."); return; }
+            const callStateRef = doc(db, callDocP);
 
-            callStateUnsubscribe = onSnapshot(callStateRef, async (docSnap) => { // made async for getDoc
+            callStateUnsubscribe = onSnapshot(callStateRef, async (docSnap) => {
                 if (!docSnap.exists()) {
                     if (peerConnection) endCall(false);
                     callStatus.textContent = 'Call has ended.';
@@ -375,7 +482,7 @@
 
                 if (data.offer && data.offer.senderId !== userId && peerConnection && peerConnection.signalingState === 'stable') {
                     console.log('Received offer for a', currentCallType, 'call');
-                    await setupPeerConnection(currentCallType); // Ensure PC is set up for the correct type
+                    await setupPeerConnection(currentCallType); 
                     if (!peerConnection) return;
 
                     peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer)).then(async () => {
@@ -390,22 +497,39 @@
                         .then(() => callStatus.textContent = 'Call connected!')
                         .catch(e => console.error("Error processing answer:", e));
                 }
-                if (data.trackStatus && data.trackStatus.senderId !== userId) { /* ... */ }
-            }, (error) => { /* ... */ });
+                if (data.trackStatus && data.trackStatus.senderId !== userId) { 
+                    remoteMicStatus.classList.toggle('hidden', data.trackStatus.audio);
+                    remoteCamStatus.classList.toggle('hidden', data.trackStatus.video);
+                    remoteVideoOverlay.classList.toggle('hidden', data.trackStatus.audio && data.trackStatus.video);
+                }
+            }, (error) => { console.error("Call state listener error:", error); showErrorMessage("Call connection error."); });
 
             const candidatesPath = getCallCandidatesColPath(callRoomId);
             if (candidatesPath) {
-                onSnapshot(query(collection(db, candidatesPath)), (snapshot) => { /* ... */ });
+                onSnapshot(query(collection(db, candidatesPath)), (snapshot) => {
+                    snapshot.docChanges().forEach(async (change) => {
+                        if (change.type === 'added' && peerConnection) {
+                            const candidateData = change.doc.data();
+                            if (candidateData.senderId !== userId) {
+                                try { await peerConnection.addIceCandidate(new RTCIceCandidate(candidateData.candidate)); } 
+                                catch (e) { console.error('Error adding ICE candidate:', e); }
+                            }
+                        }
+                    });
+                });
+            } else {
+                 console.error("Candidates collection path could not be determined for listener.");
             }
         }
 
+        // Presence System
         const updatePresence = async () => {
             if (db && userId && callRoomId) {
                 const path = getPresenceDocPath(userId);
                 if (path) await setDoc(doc(db, path), { lastSeen: serverTimestamp(), roomId: callRoomId }, { merge: true });
             }
         };
-        const startPresenceUpdates = () => { /* ... unchanged ... */ };
+        const startPresenceUpdates = () => { if (presenceInterval) clearInterval(presenceInterval); presenceInterval = setInterval(updatePresence, 10000); updatePresence(); };
         const stopPresenceUpdates = () => {
             if (presenceInterval) { clearInterval(presenceInterval); presenceInterval = null; }
             if (db && userId) {
@@ -414,7 +538,42 @@
             }
         };
 
-        const setupPeerConnection = async (callType) => { /* ... unchanged, but uses currentCallType ... */ };
+        // WebRTC Call Logic
+        const setupPeerConnection = async (callType) => {
+            if (peerConnection) peerConnection.close();
+            peerConnection = new RTCPeerConnection(rtcConfig);
+            currentCallType = callType;
+
+            peerConnection.onicecandidate = async (event) => {
+                if (event.candidate && callRoomId) {
+                    const path = getCallCandidatesColPath(callRoomId);
+                    if (path) await addDoc(collection(db, path), { senderId: userId, candidate: event.candidate.toJSON(), timestamp: serverTimestamp() });
+                    else console.error("Cannot send ICE candidate, path is null.");
+                }
+            };
+            peerConnection.ontrack = (event) => { if (remoteVideo.srcObject !== event.streams[0]) { remoteVideo.srcObject = event.streams[0]; callStatus.textContent = 'Connected!'; } };
+            peerConnection.onnegotiationneeded = async () => {
+                 if (!peerConnection || peerConnection.signalingState !== 'stable' || !callRoomId) return;
+                try {
+                    const offer = await peerConnection.createOffer(); await peerConnection.setLocalDescription(offer);
+                    const path = getCallDocPath(callRoomId);
+                    if (path) await setDoc(doc(db, path), { offer: { sdp: offer.sdp, type: offer.type, senderId: userId } }, { merge: true });
+                    else console.error("Cannot send renegotiation offer, path is null.");
+                } catch (e) { console.error('Renegotiation error:', e); }
+            };
+            try {
+                const videoConstraint = callType === 'video' ? { width: { ideal: 640 }, height: { ideal: 480 } } : false;
+                if (currentCameraDeviceId && callType === 'video' && videoConstraint) videoConstraint.deviceId = { exact: currentCameraDeviceId };
+                localStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint, audio: true });
+                localVideo.srcObject = localStream;
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                isVideoActive = callType === 'video' && localStream.getVideoTracks().some(t => t.enabled);
+                isAudioActive = localStream.getAudioTracks().some(t => t.enabled);
+                updateLocalTrackStatus();
+                toggleVideoButton.style.display = callType === 'video' ? 'flex' : 'none';
+                switchCamButton.style.display = callType === 'video' ? 'flex' : 'none';
+            } catch (error) { console.error('getUserMedia error:', error); showErrorMessage('Cam/Mic access failed.'); endCall(true); return; }
+        };
         const updateLocalTrackStatus = async () => {
             if (db && callRoomId && userId) {
                 const path = getCallDocPath(callRoomId);
@@ -422,69 +581,151 @@
             }
         };
         const startCall = async (callType) => {
-            if (!derivedKey || !callRoomId) { /* ... */ }
-            currentCallType = callType; /* ... */
+            if (!derivedKey || !callRoomId) { showErrorMessage("Verify secret key first."); return; }
+            if (peerConnection?.connectionState !== 'closed' && peerConnection) { showErrorMessage("Call in progress."); return; }
+            currentCallType = callType;
+            videoCallArea.classList.remove('hidden'); messageArea.classList.add('hidden');
+            startAudioCallButton.classList.add('hidden'); startVideoCallButton.classList.add('hidden');
+            joinCallButton.classList.add('hidden'); hangUpButton.classList.remove('hidden');
+            callStatus.textContent = `Starting ${callType} call...`;
             await setupPeerConnection(callType);
             if (!peerConnection) return;
             try {
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
+                const offer = await peerConnection.createOffer(); await peerConnection.setLocalDescription(offer);
                 const path = getCallDocPath(callRoomId);
-                if (path) await setDoc(doc(db, path), { offer: { sdp: offer.sdp, type: offer.type, senderId: userId }, status: 'ringing', callerId: userId, callType, timestamp: serverTimestamp() });
-                /* ... */
-            } catch (error) { /* ... */ }
+                if (path) {
+                    await setDoc(doc(db, path), { offer: { sdp: offer.sdp, type: offer.type, senderId: userId }, status: 'ringing', callerId: userId, callType, timestamp: serverTimestamp() });
+                    callStatus.textContent = 'Waiting for peer...';
+                } else {
+                     showErrorMessage('Failed to start call. Path error.'); endCall(true);
+                }
+            } catch (error) { console.error('Offer error:', error); showErrorMessage('Failed to start call.'); endCall(true); }
         };
         const joinExistingCall = async () => {
-            if (!derivedKey || !callRoomId) { /* ... */ }
+            if (!derivedKey || !callRoomId) { showErrorMessage("Verify secret key first."); return; }
+            if (peerConnection?.connectionState !== 'closed' && peerConnection) { showErrorMessage("Already in call."); return; }
             const path = getCallDocPath(callRoomId);
-            if (!path) { /* ... */ return; }
-            const callDocSnap = await getDoc(doc(db, path)); // Make sure getDoc is imported
-            if (!callDocSnap.exists() || !callDocSnap.data().callType) { /* ... */ return; }
+            if (!path) { showErrorMessage("Call path error."); return; }
+            const callDocSnap = await getDoc(doc(db, path));
+            if (!callDocSnap.exists() || !callDocSnap.data().callType) { showErrorMessage("Call details missing."); return; }
             currentCallType = callDocSnap.data().callType;
-            /* ... */
+            videoCallArea.classList.remove('hidden'); messageArea.classList.add('hidden');
+            startAudioCallButton.classList.add('hidden'); startVideoCallButton.classList.add('hidden');
+            joinCallButton.classList.add('hidden'); hangUpButton.classList.remove('hidden');
+            callStatus.textContent = `Joining ${currentCallType} call...`;
             await setupPeerConnection(currentCallType);
             if (!peerConnection) return;
         };
         const endCall = async (isInitiator = true) => {
-            /* ... unchanged local cleanup ... */
+            if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; localVideo.srcObject = null; }
+            if (remoteVideo.srcObject) { remoteVideo.srcObject.getTracks().forEach(t => t.stop()); remoteVideo.srcObject = null; }
+            if (peerConnection) { peerConnection.close(); peerConnection = null; }
             if (isInitiator && db && callRoomId) {
                 const path = getCallDocPath(callRoomId);
-                if (path) await deleteDoc(doc(db, path)).catch(/* ... */);
-                
+                if (path) await deleteDoc(doc(db, path)).catch(e => console.error("Call doc delete error:", e));
                 const candidatesPath = getCallCandidatesColPath(callRoomId);
                 if (candidatesPath) {
-                    const q = query(collection(db, candidatesPath));
-                    try {
-                        const snapshot = await getDocs(q); snapshot.forEach(d => deleteDoc(d.ref));
-                    } catch (e) { /* ... */ }
+                    try { const snapshot = await getDocs(query(collection(db, candidatesPath))); snapshot.forEach(d => deleteDoc(d.ref)); } 
+                    catch (e) { console.error("Candidates delete error:", e); }
                 }
             }
-            /* ... unchanged UI reset ... */
+            videoCallArea.classList.add('hidden'); messageArea.classList.remove('hidden');
+            startAudioCallButton.classList.remove('hidden'); startVideoCallButton.classList.remove('hidden');
+            joinCallButton.classList.add('hidden'); hangUpButton.classList.add('hidden');
+            callStatus.textContent = '';
+            isVideoActive = true; isAudioActive = true;
+            toggleMicButton.innerHTML = '<i class="fas fa-microphone"></i> <span class="hidden sm:inline">Mic</span>';
+            toggleVideoButton.innerHTML = '<i class="fas fa-video"></i> <span class="hidden sm:inline">Video</span>';
+            toggleViewButton.innerHTML = '<i class="fas fa-video"></i> <span class="hidden sm:inline">Call</span>';
         };
 
-        const toggleLocalMic = () => { /* ... unchanged ... */ };
-        const toggleLocalVideo = () => { /* ... unchanged ... */ };
-        const switchCamera = async () => { /* ... unchanged ... */ };
-        const toggleChatCallView = () => { /* ... unchanged ... */ };
+        // Call UI Controls
+        const toggleLocalMic = () => {
+            if (localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                if (audioTrack) {
+                    audioTrack.enabled = !audioTrack.enabled; isAudioActive = audioTrack.enabled;
+                    toggleMicButton.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i> <span class="hidden sm:inline">Mic</span>' : '<i class="fas fa-microphone-slash"></i> <span class="hidden sm:inline">Mic</span>';
+                    updateLocalTrackStatus();
+                }
+            }
+        };
+        const toggleLocalVideo = () => {
+            if (localStream && currentCallType === 'video') {
+                const videoTrack = localStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    videoTrack.enabled = !videoTrack.enabled; isVideoActive = videoTrack.enabled;
+                    toggleVideoButton.innerHTML = videoTrack.enabled ? '<i class="fas fa-video"></i> <span class="hidden sm:inline">Video</span>' : '<i class="fas fa-video-slash"></i> <span class="hidden sm:inline">Video</span>';
+                    updateLocalTrackStatus();
+                }
+            }
+        };
+        const switchCamera = async () => {
+            if (!localStream || !peerConnection || currentCallType !== 'video') return;
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                if (videoDevices.length <= 1) { showErrorMessage("No other cameras found."); return; }
 
-        verifyKeyButton.addEventListener('click', () => { /* ... */ });
-        gotItButton.addEventListener('click', () => { /* ... */ });
-        document.getElementById('messageForm').addEventListener('submit', async (e) => { // Added getElementById for safety
-            e.preventDefault(); /* ... */
-            try { /* ... */
+                const currentIndex = videoDevices.findIndex(d => d.deviceId === currentCameraDeviceId);
+                const nextCamera = videoDevices[(currentIndex + 1) % videoDevices.length];
+                localStream.getTracks().forEach(track => track.stop());
+
+                const newStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: nextCamera.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: true 
+                });
+                localVideo.srcObject = newStream; currentCameraDeviceId = nextCamera.deviceId;
+                localStream = newStream; 
+                peerConnection.getSenders().forEach(sender => {
+                    if (sender.track?.kind === 'video') sender.replaceTrack(newStream.getVideoTracks()[0]);
+                    else if (sender.track?.kind === 'audio') sender.replaceTrack(newStream.getAudioTracks()[0]);
+                });
+                updateLocalTrackStatus();
+            } catch (error) { console.error("Error switching camera:", error); showErrorMessage("Failed to switch camera. " + error.message); }
+        };
+        const toggleChatCallView = () => {
+            if (videoCallArea.classList.contains('hidden')) { 
+                videoCallArea.classList.remove('hidden'); messageArea.classList.add('hidden');
+                toggleViewButton.innerHTML = '<i class="fas fa-comments"></i> <span class="hidden sm:inline">Chat</span>';
+            } else { 
+                videoCallArea.classList.add('hidden'); messageArea.classList.remove('hidden');
+                toggleViewButton.innerHTML = '<i class="fas fa-video"></i> <span class="hidden sm:inline">Call</span>';
+            }
+        };
+
+        // Event Listeners Setup
+        verifyKeyButton.addEventListener('click', () => { deriveEncryptionKey(sharedSecretInput.value); keyWarningDiv.classList.add('hidden'); });
+        gotItButton.addEventListener('click', () => keyWarningDiv.classList.add('hidden'));
+        document.getElementById('messageForm').addEventListener('submit', async (e) => {
+            e.preventDefault(); const messageText = messageInput.value.trim();
+            if (!messageText || !db || !userId || !derivedKey) { showErrorMessage("Enter secret & message."); return; }
+            try {
+                const { encryptedText, iv } = await encryptMessage(messageText);
+                const messageData = { senderId: userId, encryptedText, iv, timestamp: serverTimestamp(), type: 'text' };
                 const path = getMessagesColPath();
                 if (path) await addDoc(collection(db, path), messageData);
-                /* ... */
-            } catch (error) { /* ... */ }
+                else console.error("Cannot send message, path is null.");
+                messageInput.value = ''; hideErrorMessage();
+            } catch (error) { console.error("Send message error:", error); }
         });
-        mediaInput.addEventListener('change', async (e) => { /* ... */
+        mediaInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0]; if (!file) return;
+            if (!db || !userId || !derivedKey) { showErrorMessage("Enter secret key for media."); return; }
+            if (file.size > 2 * 1024 * 1024) { showErrorMessage("File > 2MB. Choose smaller."); return; }
+            showErrorMessage("Uploading & encrypting media...");
+            const reader = new FileReader();
             reader.onload = async (event) => {
-                try { /* ... */
+                try {
+                    const { encryptedText, iv } = await encryptMessage(event.target.result);
+                    const messageData = { senderId: userId, encryptedContent: encryptedText, iv, timestamp: serverTimestamp(), type: 'media', mediaType: file.type.split('/')[0], fileName: file.name };
                     const path = getMessagesColPath();
                     if (path) await addDoc(collection(db, path), messageData);
-                    /* ... */
-                } catch (error) { /* ... */ }
-            }; /* ... */
+                    else console.error("Cannot send media, path is null.");
+                    hideErrorMessage(); e.target.value = '';
+                } catch (error) { console.error("Share media error:", error); showErrorMessage("Failed to share media. " + error.message); }
+            };
+            reader.readAsDataURL(file);
         });
 
         startAudioCallButton.addEventListener('click', () => startCall('audio'));
