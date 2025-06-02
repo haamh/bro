@@ -34,11 +34,11 @@
             position: absolute;
             bottom: 10px;
             right: 10px;
-            width: 120px; /* Adjusted for better visibility */
-            height: 90px; /* Adjusted for better visibility */
+            width: 120px; 
+            height: 90px; 
             border-radius: 0.5rem;
             border: 2px solid #fff;
-            z-index: 10;
+            z-index: 10; /* Will be adjusted by fullscreen styles */
             object-fit: cover;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
@@ -66,17 +66,92 @@
         #messageArea::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
         #messageArea::-webkit-scrollbar-thumb:hover { background: #555; }
 
-        /* Fullscreen specific styles for videoCallArea if needed */
+        /* Styles for when videoCallArea is in fullscreen */
+        #videoCallArea:fullscreen {
+            background-color: #000; /* Ensure a black background */
+            position: relative; /* Context for absolute positioning of children */
+            display: flex; /* Keep flex for overall structure if needed, but children are mostly absolute */
+            flex-direction: column; /* Align children vertically before absolute takes over */
+            align-items: center;
+            justify-content: center;
+        }
+
         #videoCallArea:fullscreen .video-container {
-            max-width: 100%;
-            max-height: 100%;
-            padding-top: 0; /* Adjust if aspect ratio needs to be flexible */
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
             height: 100%;
+            padding-top: 0; /* Override aspect ratio for fill */
+            border-radius: 0; /* Remove border radius in fullscreen */
+            z-index: 1; /* Base layer for video */
         }
+        #videoCallArea:fullscreen .video-container .video-element {
+            border-radius: 0; /* Ensure video element itself has no radius */
+        }
+         #videoCallArea:fullscreen .video-overlay {
+            border-radius: 0;
+            z-index: 2; /* Above main video but below PIP and controls */
+        }
+
+
         #videoCallArea:fullscreen .local-video-small {
-            width: 180px; /* Slightly larger in fullscreen */
-            height: 135px;
+            position: absolute; 
+            bottom: 85px; /* Position above the main controls strip */
+            right: 15px;
+            width: clamp(100px, 15vw, 180px); /* Responsive size with min/max */
+            height: auto; /* Maintain aspect ratio */
+            aspect-ratio: 4 / 3; /* Explicit aspect ratio */
+            border: 2px solid rgba(255,255,255,0.7);
+            border-radius: 0.375rem; /* sm border radius */
+            z-index: 15; /* Above remote video overlay, below main controls */
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
         }
+
+        #videoCallArea:fullscreen #callStatus {
+            position: absolute;
+            top: 15px; /* Position at the top */
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            z-index: 25; /* High z-index */
+            text-align: center;
+        }
+
+        #videoCallArea:fullscreen #callControls {
+            position: absolute;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: auto; 
+            max-width: calc(100% - 30px); /* Ensure some padding from screen edges */
+            display: flex; 
+            flex-wrap: nowrap; /* Prevent wrapping in fullscreen for a single line of buttons */
+            overflow-x: auto; /* Allow scrolling if too many buttons for width */
+            justify-content: center;
+            align-items: center;
+            gap: 8px; 
+            z-index: 20; /* Highest, on top of everything else in video area */
+            background-color: rgba(25, 25, 25, 0.8); 
+            padding: 10px 15px;
+            border-radius: 12px; /* More pronounced rounded corners */
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.4);
+        }
+         /* Ensure buttons inside controls are styled well for this new background */
+        #videoCallArea:fullscreen #callControls button {
+            flex-shrink: 0; /* Prevent buttons from shrinking */
+            /* Tailwind's default button styles should work, but adjust if needed */
+            /* e.g., text color if it becomes hard to read */
+            /* color: white; */
+        }
+        #videoCallArea:fullscreen #callControls button .sm\:inline {
+            display: inline !important; /* Force show text on buttons in fullscreen */
+        }
+
     </style>
 </head>
 <body class="bg-gradient-to-br from-purple-100 to-pink-200 text-gray-800">
@@ -131,7 +206,8 @@
 
         <div class="relative min-h-[50vh]">
             <div id="videoCallArea" class="absolute inset-0 p-4 hidden flex-col items-center justify-center bg-gray-800 rounded-lg z-10">
-                <div class="video-container w-full max-w-2xl"> <video id="remoteVideo" autoplay playsinline class="video-element"></video>
+                <div class="video-container w-full max-w-2xl"> 
+                    <video id="remoteVideo" autoplay playsinline class="video-element"></video>
                     <div id="remoteVideoOverlay" class="video-overlay hidden">
                         <i id="remoteMicStatus" class="fas fa-microphone-slash mr-2"></i>
                         <i id="remoteCamStatus" class="fas fa-video-slash"></i>
@@ -139,7 +215,7 @@
                     <video id="localVideo" autoplay playsinline muted class="local-video-small"></video>
                 </div>
                 <p id="callStatus" class="text-white mt-2 text-lg"></p>
-                <div class="flex flex-wrap justify-center gap-2 sm:gap-3 mt-4">
+                <div id="callControls" class="flex flex-wrap justify-center gap-2 sm:gap-3 mt-4"> {/* Added id="callControls" */}
                     <button id="toggleMicButton" class="bg-gray-700 hover:bg-gray-600 text-white py-2 px-3 rounded-lg flex items-center gap-2">
                         <i class="fas fa-microphone"></i> <span class="hidden sm:inline">Mic</span>
                     </button>
@@ -182,7 +258,7 @@
     <script type="module">
         // Firebase V10.6.0 imports
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-auth.js"; // Removed signInWithCustomToken
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-auth.js"; 
         import { getFirestore, collection, doc, addDoc, onSnapshot, serverTimestamp, query, where, setDoc, deleteDoc, getDocs, getDoc } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-firestore.js";
 
         // Firebase app instances and config - module-scoped
@@ -193,26 +269,25 @@
 
         // Application state variables
         let userId = null;
-        let derivedKey = null; // CryptoKey for AES-GCM
+        let derivedKey = null; 
         let messages = [];
-        let messagesUnsubscribe = null; // Firestore listener for messages
-        let presenceUnsubscribe = null; // Firestore listener for presence
-        let callStateUnsubscribe = null; // Firestore listener for call state
-        let candidatesUnsubscribe = null; // Firestore listener for ICE candidates
+        let messagesUnsubscribe = null; 
+        let presenceUnsubscribe = null; 
+        let callStateUnsubscribe = null; 
+        let candidatesUnsubscribe = null; 
 
         let peerConnection = null;
         let localStream = null;
-        let callRoomId = null; // Derived from shared secret, used as Firestore document ID for calls and roomId for messages/presence
+        let callRoomId = null; 
         let presenceInterval = null;
         
-        let currentCameraDeviceId = null; // To store ID of current camera
-        let isVideoActive = true; // Local video track state
-        let isAudioActive = true; // Local audio track state
-        let currentCallType = 'video'; // 'video' or 'audio'
-        let makingOffer = false; // Flag to prevent renegotiation races
-        let processingRemoteSignal = false; // Flag to manage incoming signal processing
+        let currentCameraDeviceId = null; 
+        let isVideoActive = true; 
+        let isAudioActive = true; 
+        let currentCallType = 'video'; 
+        let makingOffer = false; 
+        let processingRemoteSignal = false; 
 
-        // WebRTC configuration
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -220,7 +295,6 @@
             ],
         };
 
-        // DOM Element references (remains unchanged)
         const userIdDisplay = document.getElementById('userIdDisplay');
         const userIdSpan = userIdDisplay.querySelector('span');
         const errorMessageDiv = document.getElementById('errorMessage');
@@ -253,7 +327,6 @@
         const remoteCamStatus = document.getElementById('remoteCamStatus');
 
 
-        // Helper functions for Base64 conversion (remains unchanged)
         const arrayBufferToBase64 = (buffer) => {
             let binary = '';
             const bytes = new Uint8Array(buffer);
@@ -267,7 +340,6 @@
             return bytes.buffer;
         };
 
-        // UI Helper: Show/Hide Error Messages (remains unchanged)
         const showErrorMessage = (message) => {
             errorMessageSpan.textContent = message;
             errorMessageDiv.classList.remove('hidden');
@@ -280,7 +352,6 @@
             errorMessageSpan.textContent = '';
         };
         
-        // Path construction helpers using module-scoped firebaseConfig.projectId
         const getArtifactsBasePath = () => {
             if (!firebaseConfig || !firebaseConfig.projectId) { 
                 console.error("Firebase config (with projectId) not ready for path construction."); 
@@ -294,9 +365,7 @@
         const getCallDocPath = (currentCallRoomId) => { const basePath = getArtifactsBasePath(); return basePath && currentCallRoomId ? `${basePath}/calls_v2/${currentCallRoomId}` : null; };
         const getCallCandidatesColPath = (currentCallRoomId) => { const callDocP = getCallDocPath(currentCallRoomId); return callDocP ? `${callDocP}/candidates` : null; };
 
-        // Cryptography: Derive Key, Encrypt, Decrypt (remains unchanged)
         const deriveEncryptionKey = async (secret) => {
-            // Clear previous state if any
             if (messagesUnsubscribe) { messagesUnsubscribe(); messagesUnsubscribe = null; }
             if (presenceUnsubscribe) { presenceUnsubscribe(); presenceUnsubscribe = null; }
             if (callStateUnsubscribe) { callStateUnsubscribe(); callStateUnsubscribe = null; }
@@ -397,7 +466,6 @@
             } catch (error) { console.error("Decryption failed:", error); throw new Error("Decryption failed. Incorrect key or corrupted message."); }
         };
         
-        // UI: Render Messages (remains unchanged from previous update logic)
         const renderMessages = () => {
             messageArea.innerHTML = ''; 
 
@@ -461,7 +529,6 @@
             messageArea.scrollTop = messageArea.scrollHeight;
         };
 
-        // Firebase: Subscribe to Messages for a specific room (remains unchanged from previous update)
         function subscribeToMessages(currentRoomId) {
             if (messagesUnsubscribe) {
                 messagesUnsubscribe(); 
@@ -506,10 +573,8 @@
             });
         }
         
-        // Firebase: Initialization & Auth (Reverted to original hardcoded config)
         window.onload = async () => {
             try {
-                // User's original hardcoded Firebase config
                 firebaseConfig = { 
                     apiKey: "AIzaSyCPmT3kxQm4nqovB1eB5tWON2GCStcSzmg", 
                     authDomain: "sybau-2b8ae.firebaseapp.com",
@@ -529,7 +594,7 @@
                         console.log("User is signed in with UID:", userId);
                         userIdSpan.textContent = userId; 
                         userIdDisplay.classList.remove('hidden');
-                        renderMessages(); // Initial render (will show "enter secret key" if no room yet)
+                        renderMessages(); 
                     } else {
                         console.log("No user signed in, attempting anonymous sign-in.");
                         userId = null; 
@@ -537,7 +602,6 @@
                         try {
                             await signInAnonymously(auth);
                             console.log("Signed in anonymously.");
-                            // onAuthStateChanged will be triggered again with the new user
                         } catch (anonError) {
                             console.error("Anonymous sign-in failed:", anonError);
                             showErrorMessage("Authentication failed. Please refresh.");
@@ -550,7 +614,6 @@
             }
         };
         
-        // Presence System (remains unchanged from previous update logic)
         const updatePresence = async () => {
             if (db && userId && callRoomId) { 
                 const path = getPresenceDocPath(userId);
@@ -617,7 +680,6 @@
             });
         }
         
-        // WebRTC Call Logic (remains unchanged from previous update logic)
         function initializeCallListeners(currentCallRoomId) {
             if (callStateUnsubscribe) callStateUnsubscribe();
             if (candidatesUnsubscribe) candidatesUnsubscribe();
@@ -956,7 +1018,6 @@
             if(callRoomId) subscribeToPresence(callRoomId); else updatePresenceUI([]);
         };
 
-        // Call UI Controls (remains unchanged from previous update)
         const toggleLocalMic = async () => {
             if (!localStream || !peerConnection) return;
             const audioTrack = localStream.getAudioTracks()[0];
@@ -1060,7 +1121,7 @@
             const isChatVisible = !messageArea.classList.contains('hidden');
             if (isChatVisible) { 
                 if (!peerConnection && !joinCallButton.classList.contains('hidden')) { 
-                    // Show call view for joining
+                    // Allow switching to call view to see join prompt visually
                 } else if (!peerConnection) {
                     showErrorMessage("No active call to switch to. Start or join a call.");
                     return;
@@ -1075,7 +1136,6 @@
             }
         };
 
-        // Event Listeners Setup (remains unchanged from previous update)
         verifyKeyButton.addEventListener('click', () => { 
             deriveEncryptionKey(sharedSecretInput.value); 
             keyWarningDiv.classList.add('hidden'); 
@@ -1100,7 +1160,7 @@
             if (!db || !userId || !derivedKey || !callRoomId) { showErrorMessage("Enter secret key for media and ensure you are in a room."); e.target.value = ''; return; }
             if (file.size > 5 * 1024 * 1024) { showErrorMessage("File > 5MB. Choose smaller."); e.target.value = ''; return; } 
             
-            const uploadingMsg = showErrorMessage("Uploading & encrypting media..."); 
+            showErrorMessage("Uploading & encrypting media..."); 
             
             const reader = new FileReader();
             reader.onload = async (event) => {
