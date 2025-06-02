@@ -191,6 +191,7 @@
         let isAudioActive = true;
         let currentCallType = 'video'; // Default call type
         let callStateUnsubscribe = null; // To manage Firestore listener for call state
+        let makingOffer = false; // Flag to prevent renegotiation races
 
         // WebRTC configuration
         const rtcConfig = {
@@ -469,7 +470,7 @@
                     return;
                 }
                 const data = docSnap.data();
-                currentCallType = data.callType || 'video';
+                currentCallType = data.callType || 'video'; // Ensure currentCallType is updated
 
                 if ((data.status === 'ringing' || data.status === 'active') && data.callerId !== userId && !peerConnection) {
                     startAudioCallButton.classList.add('hidden'); startVideoCallButton.classList.add('hidden');
@@ -480,22 +481,26 @@
                     endCall(false); showErrorMessage("Call ended by other user.");
                 }
 
+                // Process offer ONLY if peerConnection is ready and it's for us
                 if (data.offer && data.offer.senderId !== userId && peerConnection && peerConnection.signalingState === 'stable') {
-                    console.log('Received offer for a', currentCallType, 'call');
-                    await setupPeerConnection(currentCallType); 
-                    if (!peerConnection) return;
-
+                    console.log('Received offer. Current call type for processing:', currentCallType);
+                    if (!peerConnection) {
+                        console.warn("Received offer, but local peerConnection is not ready (user might not have clicked Join).");
+                        return; 
+                    }
+                    
                     peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer)).then(async () => {
                         const answer = await peerConnection.createAnswer();
                         await peerConnection.setLocalDescription(answer);
                         await setDoc(callStateRef, { answer: { sdp: answer.sdp, type: answer.type, senderId: userId }, status: 'active' }, { merge: true });
                         callStatus.textContent = 'Answering call...';
-                        joinCallButton.classList.add('hidden'); hangUpButton.classList.remove('hidden');
-                    }).catch(e => console.error("Error processing offer:", e));
+                        joinCallButton.classList.add('hidden'); 
+                        hangUpButton.classList.remove('hidden');
+                    }).catch(e => console.error("Error processing offer:", e, "Signaling state:", peerConnection?.signalingState));
                 } else if (data.answer && data.answer.senderId !== userId && peerConnection && peerConnection.signalingState === 'have-local-offer') {
                     peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
                         .then(() => callStatus.textContent = 'Call connected!')
-                        .catch(e => console.error("Error processing answer:", e));
+                        .catch(e => console.error("Error processing answer:", e, "Signaling state:", peerConnection?.signalingState));
                 }
                 if (data.trackStatus && data.trackStatus.senderId !== userId) { 
                     remoteMicStatus.classList.toggle('hidden', data.trackStatus.audio);
@@ -540,9 +545,9 @@
 
         // WebRTC Call Logic
         const setupPeerConnection = async (callType) => {
-            console.log("setupPeerConnection called. Current peerConnection:", peerConnection);
+            console.log("setupPeerConnection called for type:", callType, ". Current peerConnection:", peerConnection);
             if (peerConnection) {
-                console.log("Closing existing peer connection from setupPeerConnection start");
+                console.log("Closing existing peer connection from setupPeerConnection start. State:", peerConnection.signalingState);
                 try { peerConnection.close(); } catch(e) { console.warn("Error closing previous peer connection:", e); }
                 peerConnection = null; 
             }
@@ -550,7 +555,7 @@
             try {
                 console.log("Attempting to create new RTCPeerConnection");
                 peerConnection = new RTCPeerConnection(rtcConfig); 
-                console.log("New RTCPeerConnection object:", peerConnection);
+                console.log("New RTCPeerConnection object created:", peerConnection);
 
                 if (!peerConnection || typeof peerConnection.addTrack !== 'function') {
                     console.error("Failed to create a valid RTCPeerConnection object or it's missing addTrack.");
@@ -564,10 +569,10 @@
                      try { peerConnection.close(); } catch(closeError) { console.warn("Error closing peer connection after creation failure:", closeError); }
                      peerConnection = null;
                 }
-                throw e; 
+                throw e; // Re-throw to be caught by caller
             }
             
-            currentCallType = callType;
+            currentCallType = callType; // Set currentCallType based on the setup
 
             peerConnection.onicecandidate = async (event) => {
                 if (event.candidate && callRoomId) {
@@ -577,14 +582,42 @@
                 }
             };
             peerConnection.ontrack = (event) => { if (remoteVideo.srcObject !== event.streams[0]) { remoteVideo.srcObject = event.streams[0]; callStatus.textContent = 'Connected!'; } };
+            
             peerConnection.onnegotiationneeded = async () => {
-                 if (!peerConnection || peerConnection.signalingState !== 'stable' || !callRoomId) return;
+                if (makingOffer || !peerConnection || peerConnection.signalingState !== 'stable' || !callRoomId) {
+                    console.log("onnegotiationneeded: skipped. makingOffer:", makingOffer, "signalingState:", peerConnection?.signalingState, "callRoomId:", callRoomId);
+                    return;
+                }
+            
+                makingOffer = true;
+                console.log("onnegotiationneeded: Attempting to create and set offer. Current signalingState:", peerConnection.signalingState);
+            
                 try {
-                    const offer = await peerConnection.createOffer(); await peerConnection.setLocalDescription(offer);
+                    const offer = await peerConnection.createOffer();
+                    console.log("onnegotiationneeded: Offer created. SDP (first 100 chars):", offer.sdp.substring(0,100) + "...");
+            
+                    if (peerConnection.signalingState !== 'stable') { // Re-check state before setting
+                        console.warn("onnegotiationneeded: Signaling state changed to", peerConnection.signalingState, "before setLocalDescription. Aborting this attempt.");
+                        makingOffer = false; // Reset flag if aborting
+                        return;
+                    }
+            
+                    await peerConnection.setLocalDescription(offer);
+                    console.log("onnegotiationneeded: Local description set. New signalingState:", peerConnection.signalingState);
+            
                     const path = getCallDocPath(callRoomId);
-                    if (path) await setDoc(doc(db, path), { offer: { sdp: offer.sdp, type: offer.type, senderId: userId } }, { merge: true });
-                    else console.error("Cannot send renegotiation offer, path is null.");
-                } catch (e) { console.error('Renegotiation error:', e); }
+                    if (path) {
+                        console.log("onnegotiationneeded: Sending offer to Firestore.");
+                        await setDoc(doc(db, path), { offer: { sdp: offer.sdp, type: offer.type, senderId: userId } }, { merge: true });
+                    } else {
+                        console.error("onnegotiationneeded: Cannot send renegotiation offer, path is null.");
+                    }
+                } catch (e) {
+                    console.error('Renegotiation error (onnegotiationneeded):', e);
+                } finally {
+                    makingOffer = false;
+                    console.log("onnegotiationneeded: makingOffer set to false.");
+                }
             };
 
             try {
@@ -597,19 +630,18 @@
                 localVideo.srcObject = localStream;
                 
                 console.log("getUserMedia successful. localStream:", localStream);
-                console.log("Adding tracks to peerConnection:", peerConnection);
-
+                
                 if (!peerConnection) { 
-                    console.error("CRITICAL: peerConnection is null before addTrack!");
+                    console.error("CRITICAL: peerConnection is null before addTrack in getUserMedia success block!");
                     throw new Error("peerConnection became null before adding tracks.");
                 }
-
+                console.log("Adding tracks to peerConnection:", peerConnection);
                 localStream.getTracks().forEach(track => {
-                    console.log("Adding track:", track, "to peerConnection:", peerConnection);
+                    console.log("Adding track:", track.kind, track.id, "to peerConnection:", peerConnection);
                     if (peerConnection && typeof peerConnection.addTrack === 'function') { 
                         peerConnection.addTrack(track, localStream);
                     } else {
-                        console.error("Cannot add track, peerConnection is invalid or addTrack is not a function.");
+                        console.error("Cannot add track, peerConnection is invalid or addTrack is not a function at the time of adding.");
                     }
                 });
                 console.log("Tracks added.");
@@ -625,7 +657,7 @@
                 showErrorMessage('Cam/Mic access or track setup failed: ' + error.message);
                 if (localStream) { localStream.getTracks().forEach(track => track.stop()); localStream = null; }
                 if (peerConnection) { try { peerConnection.close(); } catch(e) {console.warn("Error closing PC in catch:", e);} peerConnection = null; }
-                throw error; 
+                throw error; // Re-throw to be caught by caller
             }
         };
 
@@ -640,7 +672,7 @@
             if (!derivedKey || !callRoomId) { showErrorMessage("Verify secret key first."); return; }
             if (peerConnection?.connectionState !== 'closed' && peerConnection) { showErrorMessage("Call in progress."); return; }
             
-            currentCallType = callType;
+            currentCallType = callType; // Set this before setupPeerConnection
             videoCallArea.classList.remove('hidden'); messageArea.classList.add('hidden');
             startAudioCallButton.classList.add('hidden'); startVideoCallButton.classList.add('hidden');
             joinCallButton.classList.add('hidden'); hangUpButton.classList.remove('hidden');
@@ -664,7 +696,7 @@
                 } else {
                      showErrorMessage('Failed to start call. Path error.'); endCall(true);
                 }
-            } catch (error) { // Catches errors from setupPeerConnection or offer creation
+            } catch (error) { 
                 console.error("Error during call initiation (setup or offer):", error);
                 if (!videoCallArea.classList.contains('hidden')) { 
                     endCall(true); 
@@ -682,21 +714,22 @@
             try {
                 const callDocSnap = await getDoc(doc(db, path));
                 if (!callDocSnap.exists() || !callDocSnap.data().callType) { showErrorMessage("Call details missing."); return; }
-                currentCallType = callDocSnap.data().callType;
+                currentCallType = callDocSnap.data().callType; // Set currentCallType based on the call being joined
                 
                 videoCallArea.classList.remove('hidden'); messageArea.classList.add('hidden');
                 startAudioCallButton.classList.add('hidden'); startVideoCallButton.classList.add('hidden');
                 joinCallButton.classList.add('hidden'); hangUpButton.classList.remove('hidden');
                 callStatus.textContent = `Joining ${currentCallType} call...`;
 
-                await setupPeerConnection(currentCallType);
+                await setupPeerConnection(currentCallType); // Pass the correct callType
                 if (!peerConnection) {
                      console.error("setupPeerConnection failed for join call.");
                      showErrorMessage('Failed to initialize call connection for joining.');
                      endCall(true); 
                      return;
                 }
-                console.log("Peer connection set up for joining call.");
+                console.log("Peer connection set up for joining call. Waiting for offer/answer via Firestore.");
+                // The onSnapshot for callStateRef will handle offer/answer processing.
             } catch (error) {
                 console.error("Error during join call (setup or getDoc):", error);
                 if (!videoCallArea.classList.contains('hidden')) {
