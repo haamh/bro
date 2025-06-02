@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Chat & Call</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            overflow: hidden; /* Prevent body scroll, let main content scroll */
+        }
+        /* Custom scrollbar for message area */
+        .message-area::-webkit-scrollbar {
+            width: 8px;
+        }
+        .message-area::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        .message-area::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 10px;
+        }
+        .message-area::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            padding-top: 75%; /* 4:3 Aspect Ratio */
+            background-color: #333;
+            border-radius: 0.75rem;
+            overflow: hidden;
+        }
+        .video-element {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 0.75rem;
+        }
+        .local-video-small {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            width: 120px; /* Small size for local video */
+            height: 90px; /* 4:3 aspect ratio */
+            border-radius: 0.5rem;
+            border: 2px solid #fff;
+            z-index: 10;
+            object-fit: cover;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen bg-gradient-to-br from-purple-100 to-pink-200 text-gray-800">
+
+    <header class="bg-white shadow-md p-4 text-center rounded-b-xl">
+        <h1 class="text-2xl sm:text-3xl font-extrabold text-purple-700">Secure Chat & Call</h1>
+        <p class="text-xs sm:text-sm text-gray-600 mt-1">Encrypted messaging and calls for two.</p>
+        <p id="userIdDisplay" class="text-xs text-gray-500 mt-2 hidden">
+            Your User ID: <span class="font-mono bg-gray-100 px-2 py-1 rounded-md break-all"></span>
+        </p>
+    </header>
+
+    <div id="errorMessage" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md m-4 hidden" role="alert">
+        <strong class="font-bold">Error:</strong>
+        <span class="block sm:inline ml-2"></span>
+    </div>
+
+    <div class="p-4 bg-white shadow-sm rounded-lg m-4 flex flex-col sm:flex-row items-center gap-3">
+        <label for="sharedSecret" class="text-sm font-medium text-gray-700 whitespace-nowrap">Shared Secret Key:</label>
+        <input
+            id="sharedSecret"
+            type="password"
+            placeholder="Enter shared secret key"
+            class="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm w-full sm:w-auto"
+        />
+        <button id="verifyKeyButton" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out">Verify Key & Connect</button>
+        <div id="keyWarning" class="text-xs text-red-500 mt-2 sm:mt-0">
+            <p><strong>Important:</strong> This key is NOT stored. You must re-enter it on refresh.</p>
+            <p>Share this key securely with your chat partner OUTSIDE this app.</p>
+            <button id="gotItButton" class="text-blue-600 hover:underline mt-1">Got it!</button>
+        </div>
+    </div>
+
+    <div class="p-4 bg-white shadow-sm rounded-lg m-4 flex flex-col gap-3">
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-gray-700">Connected Users (in this room):</span>
+            <div id="connectedUsersList" class="flex-1 flex flex-wrap gap-2 text-sm text-gray-600">
+                <span class="text-gray-400 italic">None yet...</span>
+            </div>
+        </div>
+        <div class="flex justify-center gap-4 mt-2">
+            <button id="startCallButton" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed" disabled>Start Call</button>
+            <button id="hangUpButton" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out hidden">Hang Up</button>
+        </div>
+    </div>
+
+    <div id="videoCallArea" class="flex-1 p-4 hidden flex-col items-center justify-center bg-gray-800 rounded-lg m-4">
+        <div class="video-container w-full max-w-md">
+            <video id="remoteVideo" autoplay playsinline class="video-element"></video>
+            <video id="localVideo" autoplay playsinline muted class="local-video-small"></video>
+        </div>
+        <p id="callStatus" class="text-white mt-2 text-lg"></p>
+    </div>
+
+    <main id="messageArea" class="flex-1 overflow-y-auto p-4 space-y-4 pb-28 sm:pb-32 message-area">
+        <div id="initialMessage" class="flex justify-center items-center h-full text-gray-500 text-base sm:text-lg italic text-center px-4">
+            <p>Start a secure conversation by entering a shared secret key and sending a message!</p>
+        </div>
+    </main>
+
+    <form id="messageForm" class="bg-white p-3 sm:p-4 shadow-lg rounded-t-xl flex items-center space-x-2 sm:space-x-3 fixed bottom-4 left-0 right-0 w-full">
+        <input
+            id="messageInput"
+            type="text"
+            placeholder="Type your message..."
+            class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base"
+            disabled
+        />
+        <label for="mediaInput" class="cursor-pointer bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-3 rounded-lg shadow-sm transition duration-300 ease-in-out">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
+                <path fill-rule="evenodd" d="M1.5 6a2.25 2.25 0 0 1 2.25-2.25h16.5A2.25 2.25 0 0 1 22.5 6v12a2.25 2.25 0 0 1-2.25 2.25H3.75A2.25 2.25 0 0 1 1.5 18V6ZM3 16.06V18c0 .414.336.75.75.75h16.5a.75.75 0 0 0 .75-.75v-1.94l-2.432-2.432a1.125 1.125 0 0 0-1.588 0L9.407 17.11c-.095.095-.22.14-.345.14-.125 0-.25-.045-.345-.14l-4.16-4.16a1.125 1.125 0 0 0-1.588 0L3 16.06ZM15.75 9.75a.75.75 0 0 1 .75-.75h.008a.75.75 0 0 1 .75.75v.008a.75.75 0 0 1-.75.75h-.008a.75.75 0 0 1-.75-.75V9.75Z" clip-rule="evenodd" />
+            </svg>
+            <input type="file" id="mediaInput" class="hidden" accept="image/*,video/*,audio/*">
+        </label>
+        <button
+            id="sendButton"
+            type="submit"
+            class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-5 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
+            disabled
+        >
+            Send
+        </button>
+    </form>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, onSnapshot, serverTimestamp, query, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-firestore.js";
+
+        // Global variables for Firebase instances and state
+        let app;
+        let db;
+        let auth;
+        let userId = null;
+        let derivedKey = null;
+        let messages = []; // Array to store message data with decryption state
+        let peerConnection = null;
+        let localStream = null;
+        let callRoomId = null; // Derived from sharedSecretKey
+        let presenceInterval = null;
+
+        // WebRTC STUN servers
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+            ],
+        };
+
+        // DOM Elements
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const userIdSpan = userIdDisplay.querySelector('span');
+        const errorMessageDiv = document.getElementById('errorMessage');
+        const errorMessageSpan = errorMessageDiv.querySelector('span');
+        const sharedSecretInput = document.getElementById('sharedSecret');
+        const verifyKeyButton = document.getElementById('verifyKeyButton');
+        const keyWarningDiv = document.getElementById('keyWarning');
+        const gotItButton = document.getElementById('gotItButton');
+        const messageArea = document.getElementById('messageArea');
+        const initialMessageDiv = document.getElementById('initialMessage');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const messageForm = document.getElementById('messageForm');
+        const mediaInput = document.getElementById('mediaInput');
+        const connectedUsersList = document.getElementById('connectedUsersList');
+        const startCallButton = document.getElementById('startCallButton');
+        const hangUpButton = document.getElementById('hangUpButton');
+        const videoCallArea = document.getElementById('videoCallArea');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const callStatus = document.getElementById('callStatus');
+
+        // Helper function to convert ArrayBuffer to Base64 string
+        const arrayBufferToBase64 = (buffer) => {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        };
+
+        // Helper function to convert Base64 string to ArrayBuffer
+        const base64ToArrayBuffer = (base64) => {
+            const binary_string = atob(base64);
+            const len = binary_string.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes.buffer;
+        };
+
+        // Function to display error messages
+        const showErrorMessage = (message) => {
+            errorMessageSpan.textContent = message;
+            errorMessageDiv.classList.remove('hidden');
+        };
+
+        // Function to hide error messages
+        const hideErrorMessage = () => {
+            errorMessageDiv.classList.add('hidden');
+            errorMessageSpan.textContent = '';
+        };
+
+        // Derive encryption key from shared secret
+        const deriveEncryptionKey = async (secret) => {
+            if (!secret) {
+                derivedKey = null;
+                callRoomId = null;
+                messageInput.disabled = true;
+                sendButton.disabled = true;
+                startCallButton.disabled = true;
+                return;
+            }
+            try {
+                const enc = new TextEncoder();
+                const salt = enc.encode('secure-chat-salt'); // A fixed salt for key derivation
+                const keyMaterial = await window.crypto.subtle.importKey(
+                    'raw',
+                    enc.encode(secret),
+                    { name: 'PBKDF2' },
+                    false,
+                    ['deriveKey']
+                );
+                const derived = await window.crypto.subtle.deriveKey(
+                    {
+                        name: 'PBKDF2',
+                        salt: salt,
+                        iterations: 100000, // High iteration count for security
+                        hash: 'SHA-256',
+                    },
+                    keyMaterial,
+                    { name: 'AES-GCM', length: 256 },
+                    true,
+                    ['encrypt', 'decrypt']
+                );
+                derivedKey = derived;
+                // Use a hash of the key as a room ID for presence and calls
+                const keyHashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(secret));
+                callRoomId = arrayBufferToBase64(keyHashBuffer).replace(/[^a-zA-Z0-9]/g, ''); // Sanitize for Firestore doc ID
+                hideErrorMessage();
+                messageInput.disabled = false;
+                sendButton.disabled = false;
+                startCallButton.disabled = false;
+                autoDecryptMessages(); // Auto-decrypt existing messages
+                startPresenceUpdates(); // Start presence updates
+            } catch (error) {
+                console.error("Error deriving key:", error);
+                showErrorMessage("Failed to derive encryption key. Please check your shared secret.");
+                derivedKey = null;
+                callRoomId = null;
+                messageInput.disabled = true;
+                sendButton.disabled = true;
+                startCallButton.disabled = true;
+                stopPresenceUpdates();
+            }
+        };
+
+        // Auto-decrypt all messages when key is available
+        const autoDecryptMessages = async () => {
+            if (!derivedKey) return;
+            const newMessages = await Promise.all(messages.map(async (msg) => {
+                if (msg.encryptedText && msg.iv && !msg.isDecrypted) {
+                    try {
+                        const decryptedContent = await decryptMessage(msg.encryptedText, msg.iv);
+                        return { ...msg, decryptedText: decryptedContent, isDecrypted: true, decryptionError: null };
+                    } catch (error) {
+                        return { ...msg, decryptedText: null, isDecrypted: false, decryptionError: error.message };
+                    }
+                }
+                return msg;
+            }));
+            messages = newMessages;
+            renderMessages();
+        };
+
+        // Encrypt message
+        const encryptMessage = async (text) => {
+            if (!derivedKey) {
+                showErrorMessage("Encryption key not ready. Please enter a shared secret.");
+                throw new Error("Encryption key not ready.");
+            }
+            try {
+                const enc = new TextEncoder();
+                const encoded = enc.encode(text);
+                const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 12-byte IV for AES-GCM
+
+                const ciphertext = await window.crypto.subtle.encrypt(
+                    { name: 'AES-GCM', iv: iv },
+                    derivedKey,
+                    encoded
+                );
+
+                return {
+                    encryptedText: arrayBufferToBase64(ciphertext),
+                    iv: arrayBufferToBase64(iv),
+                };
+            } catch (error) {
+                console.error("Encryption failed:", error);
+                showErrorMessage("Failed to encrypt message. Is your shared secret correct?");
+                throw error;
+            }
+        };
+
+        // Decrypt message
+        const decryptMessage = async (encryptedData, ivBase64) => {
+            if (!derivedKey) {
+                showErrorMessage("Decryption key not ready. Please enter a shared secret.");
+                throw new Error("Decryption key not ready.");
+            }
+            try {
+                const ciphertext = base64ToArrayBuffer(encryptedData);
+                const iv = base64ToArrayBuffer(ivBase64);
+                const decrypted = await window.crypto.subtle.decrypt(
+                    { name: 'AES-GCM', iv: iv },
+                    derivedKey,
+                    ciphertext
+                );
+                const dec = new TextDecoder();
+                return dec.decode(decrypted);
+            } catch (error) {
+                console.error("Decryption failed:", error);
+                // Do not set global error message here, as it's per-message
+                throw new Error("Decryption failed. Incorrect key or corrupted message.");
+            }
+        };
+
+        // Render messages to the UI
+        const renderMessages = () => {
+            messageArea.innerHTML = ''; // Clear existing messages
+            if (messages.length === 0) {
+                initialMessageDiv.classList.remove('hidden');
+                messageArea.appendChild(initialMessageDiv);
+                return;
+            } else {
+                initialMessageDiv.classList.add('hidden');
+            }
+
+            messages.forEach(msg => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `flex ${msg.senderId === userId ? 'justify-end' : 'justify-start'}`;
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = `max-w-[80%] p-3 rounded-xl shadow-lg flex flex-col ${
+                    msg.senderId === userId
+                        ? 'bg-purple-500 text-white rounded-br-none'
+                        : 'bg-white text-gray-800 rounded-bl-none'
+                }`;
+
+                const senderSpan = document.createElement('span');
+                senderSpan.className = 'text-xs opacity-80 mb-1';
+                senderSpan.textContent = msg.senderId === userId ? 'You' : `User: ${msg.senderId.substring(0, 8)}...`;
+                contentDiv.appendChild(senderSpan);
+
+                if (msg.type === 'media' && msg.encryptedContent && msg.iv) {
+                    const mediaContainer = document.createElement('div');
+                    mediaContainer.className = 'mt-2';
+                    if (msg.isDecrypted && msg.decryptedText) {
+                        const mediaElement = document.createElement(msg.mediaType === 'image' ? 'img' : (msg.mediaType === 'video' ? 'video' : 'audio'));
+                        mediaElement.src = msg.decryptedText;
+                        mediaElement.controls = true;
+                        mediaElement.className = 'max-w-full h-auto rounded-md';
+                        if (msg.mediaType === 'video') mediaElement.autoplay = true;
+                        contentDiv.appendChild(mediaElement);
+                    } else {
+                        const encryptedP = document.createElement('p');
+                        encryptedP.className = 'text-sm sm:text-base italic text-gray-400 break-words';
+                        encryptedP.textContent = `Encrypted ${msg.mediaType} file...`;
+                        contentDiv.appendChild(encryptedP);
+
+                        if (msg.decryptionError) {
+                            const errorP = document.createElement('p');
+                            errorP.className = 'text-xs text-red-300 mt-1';
+                            errorP.textContent = `Error: ${msg.decryptionError}`;
+                            contentDiv.appendChild(errorP);
+                        }
+                    }
+                } else if (msg.encryptedText && msg.iv) { // Regular text message
+                    if (msg.isDecrypted && msg.decryptedText) {
+                        const decryptedP = document.createElement('p');
+                        decryptedP.className = 'text-sm sm:text-base break-words';
+                        decryptedP.textContent = msg.decryptedText;
+                        contentDiv.appendChild(decryptedP);
+                    } else {
+                        const encryptedP = document.createElement('p');
+                        encryptedP.className = 'text-sm sm:text-base italic text-gray-400 break-words';
+                        encryptedP.textContent = `Encrypted Message: ${msg.encryptedText ? msg.encryptedText.substring(0, 30) + '...' : 'N/A'}`;
+                        contentDiv.appendChild(encryptedP);
+
+                        if (msg.decryptionError) {
+                            const errorP = document.createElement('p');
+                            errorP.className = 'text-xs text-red-300 mt-1';
+                            errorP.textContent = `Error: ${msg.decryptionError}`;
+                            contentDiv.appendChild(errorP);
+                        }
+                    }
+                }
+
+                const timestampSpan = document.createElement('span');
+                timestampSpan.className = 'text-xs opacity-75 mt-1 block text-right';
+                if (msg.timestamp && msg.timestamp.toDate) { // Check if timestamp is a Firestore Timestamp
+                    timestampSpan.textContent = msg.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                } else if (msg.timestamp) { // Fallback for non-Firestore timestamps (e.g., if loaded before conversion)
+                    timestampSpan.textContent = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                }
+                contentDiv.appendChild(timestampSpan);
+
+                messageDiv.appendChild(contentDiv);
+                messageArea.appendChild(messageDiv);
+            });
+            messageArea.scrollTop = messageArea.scrollHeight; // Scroll to bottom
+        };
+
+        // --- Firebase Initialization and Auth Listener ---
+        window.onload = async () => {
+            try {
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                    } else {
+                        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    }
+                    userIdSpan.textContent = userId;
+                    userIdDisplay.classList.remove('hidden');
+
+                    // Start listening for messages only after auth is ready
+                    const messagesCollectionRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/chat_messages`);
+                    const q = query(messagesCollectionRef);
+
+                    onSnapshot(q, (snapshot) => {
+                        const fetchedMessages = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data(),
+                            decryptedText: null, // Initialize decryption state
+                            isDecrypted: false,
+                            decryptionError: null,
+                        }));
+                        // Sort messages by timestamp client-side
+                        fetchedMessages.sort((a, b) => (a.timestamp?.toDate() || 0) - (b.timestamp?.toDate() || 0));
+                        messages = fetchedMessages; // Update global messages array
+                        renderMessages(); // Re-render all messages
+                        autoDecryptMessages(); // Attempt to decrypt if key is already set
+                    }, (error) => {
+                        console.error("Error fetching messages:", error);
+                        showErrorMessage("Failed to fetch messages. Please check your connection.");
+                    });
+
+                    // Listen for presence updates
+                    const presenceCollectionRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/presence`);
+                    onSnapshot(presenceCollectionRef, (snapshot) => {
+                        if (!callRoomId) return; // Only update if key is set
+
+                        const now = Date.now();
+                        const activeUsers = snapshot.docs.filter(doc => {
+                            const data = doc.data();
+                            // Consider user active if lastSeen is within the last 30 seconds and they are in the same room
+                            return data.lastSeen && (now - data.lastSeen.toDate().getTime() < 30000) && data.roomId === callRoomId;
+                        }).map(doc => doc.id);
+
+                        connectedUsersList.innerHTML = '';
+                        if (activeUsers.length === 0) {
+                            connectedUsersList.innerHTML = '<span class="text-gray-400 italic">None yet...</span>';
+                        } else {
+                            activeUsers.forEach(id => {
+                                const userSpan = document.createElement('span');
+                                userSpan.className = `bg-purple-200 text-purple-800 px-2 py-1 rounded-full text-xs ${id === userId ? 'font-bold' : ''}`;
+                                userSpan.textContent = id === userId ? 'You' : `User: ${id.substring(0, 8)}...`;
+                                connectedUsersList.appendChild(userSpan);
+                            });
+                        }
+                    }, (error) => {
+                        console.error("Error listening to presence:", error);
+                    });
+                });
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                showErrorMessage("Failed to initialize the app. Please try again.");
+            }
+        };
+
+        // --- Presence System ---
+        const updatePresence = async () => {
+            if (db && userId && callRoomId) {
+                const presenceRef = doc(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/presence`, userId);
+                await setDoc(presenceRef, {
+                    lastSeen: serverTimestamp(),
+                    roomId: callRoomId,
+                }, { merge: true });
+            }
+        };
+
+        const startPresenceUpdates = () => {
+            if (presenceInterval) {
+                clearInterval(presenceInterval);
+            }
+            // Update presence every 10 seconds
+            presenceInterval = setInterval(updatePresence, 10000);
+            updatePresence(); // Initial update
+        };
+
+        const stopPresenceUpdates = () => {
+            if (presenceInterval) {
+                clearInterval(presenceInterval);
+                presenceInterval = null;
+            }
+            // Optionally remove user from presence when they leave the room (e.g., close tab or change key)
+            if (db && userId) {
+                const presenceRef = doc(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/presence`, userId);
+                deleteDoc(presenceRef).catch(e => console.error("Error deleting presence:", e));
+            }
+        };
+
+        // --- WebRTC Call Functionality ---
+        const setupPeerConnection = async () => {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            peerConnection.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    console.log('Sending ICE candidate:', event.candidate);
+                    const candidatesRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/calls/${callRoomId}/candidates`);
+                    await addDoc(candidatesRef, {
+                        senderId: userId,
+                        candidate: event.candidate.toJSON(),
+                        timestamp: serverTimestamp(),
+                    });
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                console.log('Received remote track:', event.streams[0]);
+                if (remoteVideo.srcObject !== event.streams[0]) {
+                    remoteVideo.srcObject = event.streams[0];
+                    callStatus.textContent = 'Connected!';
+                }
+            };
+
+            // Get local media stream
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                localVideo.srcObject = localStream;
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+                console.log('Local stream added.');
+            } catch (error) {
+                console.error('Error getting user media:', error);
+                showErrorMessage('Failed to get camera/microphone access. Please allow permissions.');
+                endCall();
+                return;
+            }
+
+            // Listen for signaling messages (offers, answers, candidates)
+            const callRef = doc(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/calls`, callRoomId);
+            onSnapshot(callRef, async (docSnap) => {
+                const data = docSnap.data();
+                if (data) {
+                    if (data.offer && data.offer.senderId !== userId && !peerConnection.currentRemoteDescription) {
+                        console.log('Received offer:', data.offer.sdp);
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                        const answer = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answer);
+                        await setDoc(callRef, { answer: { sdp: answer.sdp, type: answer.type, senderId: userId } }, { merge: true });
+                        callStatus.textContent = 'Answering call...';
+                    } else if (data.answer && data.answer.senderId !== userId && !peerConnection.currentRemoteDescription) {
+                        console.log('Received answer:', data.answer.sdp);
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                        callStatus.textContent = 'Call connected!';
+                    }
+                }
+            }, (error) => {
+                console.error("Error listening to call signaling:", error);
+            });
+
+            const candidatesCollectionRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/calls/${callRoomId}/candidates`);
+            onSnapshot(candidatesCollectionRef, (snapshot) => {
+                snapshot.docChanges().forEach(async (change) => {
+                    if (change.type === 'added') {
+                        const candidateData = change.doc.data();
+                        if (candidateData.senderId !== userId) {
+                            console.log('Adding ICE candidate:', candidateData.candidate);
+                            try {
+                                await peerConnection.addIceCandidate(new RTCIceCandidate(candidateData.candidate));
+                            } catch (e) {
+                                console.error('Error adding received ICE candidate:', e);
+                            }
+                        }
+                    }
+                });
+            }, (error) => {
+                console.error("Error listening to ICE candidates:", error);
+            });
+        };
+
+        const startCall = async () => {
+            if (!derivedKey || !callRoomId) {
+                showErrorMessage("Please verify your shared secret key first.");
+                return;
+            }
+            if (peerConnection && peerConnection.connectionState !== 'closed') {
+                showErrorMessage("Call already in progress.");
+                return;
+            }
+
+            videoCallArea.classList.remove('hidden');
+            startCallButton.classList.add('hidden');
+            hangUpButton.classList.remove('hidden');
+            callStatus.textContent = 'Starting call...';
+
+            await setupPeerConnection();
+
+            try {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                const callRef = doc(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/calls`, callRoomId);
+                await setDoc(callRef, { offer: { sdp: offer.sdp, type: offer.type, senderId: userId } });
+                console.log('Offer sent.');
+                callStatus.textContent = 'Waiting for peer...';
+            } catch (error) {
+                console.error('Error creating or sending offer:', error);
+                showErrorMessage('Failed to start call. Check console for details.');
+                endCall();
+            }
+        };
+
+        const endCall = async () => {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+                localVideo.srcObject = null;
+            }
+            if (remoteVideo.srcObject) {
+                remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+                remoteVideo.srcObject = null;
+            }
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+
+            // Clear call signaling data from Firestore
+            if (db && callRoomId) {
+                const callRef = doc(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/calls`, callRoomId);
+                await deleteDoc(callRef).catch(e => console.error("Error deleting call data:", e));
+                const candidatesCollectionRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/calls/${callRoomId}/candidates`);
+                const snapshot = await getDocs(query(candidatesCollectionRef));
+                snapshot.forEach(doc => deleteDoc(doc.ref));
+            }
+
+            videoCallArea.classList.add('hidden');
+            startCallButton.classList.remove('hidden');
+            hangUpButton.classList.add('hidden');
+            callStatus.textContent = '';
+            hideErrorMessage();
+        };
+
+        // --- Event Listeners ---
+        verifyKeyButton.addEventListener('click', () => {
+            deriveEncryptionKey(sharedSecretInput.value);
+            keyWarningDiv.classList.add('hidden'); // Hide warning after verification attempt
+        });
+
+        gotItButton.addEventListener('click', () => {
+            keyWarningDiv.classList.add('hidden');
+        });
+
+        messageForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const messageText = messageInput.value.trim();
+            if (!messageText || !db || !userId || !derivedKey) {
+                showErrorMessage("Please enter a shared secret key and a message.");
+                return;
+            }
+
+            try {
+                const { encryptedText, iv } = await encryptMessage(messageText);
+
+                const messageData = {
+                    senderId: userId,
+                    encryptedText: encryptedText,
+                    iv: iv,
+                    timestamp: serverTimestamp(),
+                    type: 'text',
+                };
+
+                const messagesCollectionRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/chat_messages`);
+                await addDoc(messagesCollectionRef, messageData);
+                messageInput.value = ''; // Clear input
+                hideErrorMessage(); // Clear error on successful send
+            } catch (error) {
+                // Error message already set by encryptMessage
+                console.error("Error sending message:", error);
+            }
+        });
+
+        mediaInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (!db || !userId || !derivedKey) {
+                showErrorMessage("Please enter a shared secret key before sharing media.");
+                return;
+            }
+
+            if (file.size > 1024 * 1024) { // 1MB limit for Firestore document
+                showErrorMessage("File size exceeds 1MB limit. Please choose a smaller file.");
+                return;
+            }
+
+            showErrorMessage("Uploading and encrypting media... (This may take a moment)");
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                try {
+                    const fileBase64 = event.target.result; // Data URL (Base64)
+                    const { encryptedText, iv } = await encryptMessage(fileBase64);
+
+                    const messageData = {
+                        senderId: userId,
+                        encryptedContent: encryptedText, // Renamed for clarity for media
+                        iv: iv,
+                        timestamp: serverTimestamp(),
+                        type: 'media',
+                        mediaType: file.type.split('/')[0], // 'image', 'video', 'audio'
+                        fileName: file.name,
+                    };
+
+                    const messagesCollectionRef = collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/public/data/chat_messages`);
+                    await addDoc(messagesCollectionRef, messageData);
+                    hideErrorMessage();
+                    e.target.value = ''; // Clear file input
+                } catch (error) {
+                    console.error("Error sharing media:", error);
+                    showErrorMessage("Failed to share media. " + error.message);
+                }
+            };
+            reader.readAsDataURL(file); // Read file as Data URL (Base64)
+        });
+
+        startCallButton.addEventListener('click', startCall);
+        hangUpButton.addEventListener('click', endCall);
+
+        // Clean up presence when tab is closed/navigated away
+        window.addEventListener('beforeunload', stopPresenceUpdates);
+    </script>
+</body>
+</html>
