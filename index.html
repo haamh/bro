@@ -180,17 +180,16 @@
     </form>
 
     <script type="module">
-        // Firebase V10.6.0 imports (as in original user code)
+        // Firebase V10.6.0 imports
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-auth.js"; // Removed signInWithCustomToken
         import { getFirestore, collection, doc, addDoc, onSnapshot, serverTimestamp, query, where, setDoc, deleteDoc, getDocs, getDoc } from "https://www.gstatic.com/firebasejs/10.6.0/firebase-firestore.js";
 
         // Firebase app instances and config - module-scoped
         let app;
         let db;
         let auth;
-        let firebaseConfigGlobal; // Will be assigned from __firebase_config
-        let appIdGlobal; // Will be assigned from __app_id
+        let firebaseConfig; // Will be assigned in window.onload with hardcoded values
 
         // Application state variables
         let userId = null;
@@ -221,7 +220,7 @@
             ],
         };
 
-        // DOM Element references
+        // DOM Element references (remains unchanged)
         const userIdDisplay = document.getElementById('userIdDisplay');
         const userIdSpan = userIdDisplay.querySelector('span');
         const errorMessageDiv = document.getElementById('errorMessage');
@@ -231,7 +230,7 @@
         const keyWarningDiv = document.getElementById('keyWarning');
         const gotItButton = document.getElementById('gotItButton');
         const messageArea = document.getElementById('messageArea');
-        const initialMessageDiv = document.getElementById('initialMessage'); // The one asking for secret key
+        const initialMessageDiv = document.getElementById('initialMessage');
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');
         const mediaInput = document.getElementById('mediaInput');
@@ -253,6 +252,7 @@
         const remoteMicStatus = document.getElementById('remoteMicStatus');
         const remoteCamStatus = document.getElementById('remoteCamStatus');
 
+
         // Helper functions for Base64 conversion (remains unchanged)
         const arrayBufferToBase64 = (buffer) => {
             let binary = '';
@@ -267,31 +267,34 @@
             return bytes.buffer;
         };
 
-        // UI Helper: Show/Hide Error Messages
+        // UI Helper: Show/Hide Error Messages (remains unchanged)
         const showErrorMessage = (message) => {
             errorMessageSpan.textContent = message;
             errorMessageDiv.classList.remove('hidden');
             setTimeout(() => {
                 if (errorMessageSpan.textContent === message) hideErrorMessage();
-            }, 7000); // Increased duration
+            }, 7000);
         };
         const hideErrorMessage = () => {
             errorMessageDiv.classList.add('hidden');
             errorMessageSpan.textContent = '';
         };
         
-        // Path construction helpers using global appIdGlobal
+        // Path construction helpers using module-scoped firebaseConfig.projectId
         const getArtifactsBasePath = () => {
-            if (!appIdGlobal) { console.error("appIdGlobal not ready for path construction."); return null; }
-            return `artifacts/${appIdGlobal}/public/data`;
+            if (!firebaseConfig || !firebaseConfig.projectId) { 
+                console.error("Firebase config (with projectId) not ready for path construction."); 
+                return null; 
+            }
+            return `artifacts/${firebaseConfig.projectId}/public/data`;
         };
-        const getMessagesColPath = () => { const basePath = getArtifactsBasePath(); return basePath ? `${basePath}/chat_messages_v2` : null; }; // Added _v2 to avoid conflict if old data exists
+        const getMessagesColPath = () => { const basePath = getArtifactsBasePath(); return basePath ? `${basePath}/chat_messages_v2` : null; };
         const getPresenceColPath = () => { const basePath = getArtifactsBasePath(); return basePath ? `${basePath}/presence_v2` : null; };
         const getPresenceDocPath = (currentUserId) => { const colPath = getPresenceColPath(); return colPath && currentUserId ? `${colPath}/${currentUserId}` : null; };
         const getCallDocPath = (currentCallRoomId) => { const basePath = getArtifactsBasePath(); return basePath && currentCallRoomId ? `${basePath}/calls_v2/${currentCallRoomId}` : null; };
         const getCallCandidatesColPath = (currentCallRoomId) => { const callDocP = getCallDocPath(currentCallRoomId); return callDocP ? `${callDocP}/candidates` : null; };
 
-        // Cryptography: Derive Key, Encrypt, Decrypt
+        // Cryptography: Derive Key, Encrypt, Decrypt (remains unchanged)
         const deriveEncryptionKey = async (secret) => {
             // Clear previous state if any
             if (messagesUnsubscribe) { messagesUnsubscribe(); messagesUnsubscribe = null; }
@@ -302,8 +305,8 @@
             messages = [];
             derivedKey = null;
             callRoomId = null; 
-            renderMessages(); // Show initial "enter secret" prompt
-            updatePresenceUI([]); // Clear connected users
+            renderMessages(); 
+            updatePresenceUI([]); 
 
             messageInput.disabled = true; sendButton.disabled = true; mediaInput.disabled = true;
             startAudioCallButton.disabled = true; startVideoCallButton.disabled = true;
@@ -317,7 +320,7 @@
 
             try {
                 const enc = new TextEncoder();
-                const salt = enc.encode('secure-chat-salt-v2'); // Unique salt
+                const salt = enc.encode('secure-chat-salt-v2'); 
                 const keyMaterial = await window.crypto.subtle.importKey('raw', enc.encode(secret), { name: 'PBKDF2' }, false, ['deriveKey']);
                 const derived = await window.crypto.subtle.deriveKey(
                     { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
@@ -328,22 +331,16 @@
                 );
                 derivedKey = derived;
                 
-                // Derive a stable callRoomId from the secret itself for Firestore paths
-                const keyHashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(secret + '-room-id-v2')); // Add suffix for uniqueness
-                callRoomId = arrayBufferToBase64(keyHashBuffer).replace(/[^a-zA-Z0-9]/g, '').substring(0, 40); // Ensure valid Firestore ID, limit length
+                const keyHashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(secret + '-room-id-v2')); 
+                callRoomId = arrayBufferToBase64(keyHashBuffer).replace(/[^a-zA-Z0-9]/g, '').substring(0, 40); 
 
                 hideErrorMessage();
                 messageInput.disabled = false; sendButton.disabled = false; mediaInput.disabled = false;
                 
-                // Subscribe to messages for the new room
                 subscribeToMessages(callRoomId);
-                // Initialize call listeners for the new room
                 initializeCallListeners(callRoomId); 
-                // Start presence updates for the new room
                 startPresenceUpdates();
-                // Subscribe to presence for the new room
                 subscribeToPresence(callRoomId);
-
 
             } catch (error) {
                 console.error("Error deriving key:", error);
@@ -353,7 +350,7 @@
                 startAudioCallButton.disabled = true; startVideoCallButton.disabled = true;
                 joinCallButton.classList.add('hidden');
                 stopPresenceUpdates();
-                renderMessages(); // Re-render to show initial prompt
+                renderMessages(); 
                 updatePresenceUI([]);
             }
         };
@@ -362,7 +359,6 @@
             if (!derivedKey) return;
             let hasNewDecryptions = false;
             const newMessages = await Promise.all(messages.map(async (msg) => {
-                // Only attempt decryption if not already decrypted and has necessary data
                 if ((msg.encryptedText || msg.encryptedContent) && msg.iv && !msg.isDecrypted) {
                     const contentToDecrypt = msg.type === 'media' ? msg.encryptedContent : msg.encryptedText;
                     try {
@@ -371,14 +367,13 @@
                         return { ...msg, decryptedText: decryptedContent, isDecrypted: true, decryptionError: null };
                     } catch (error) {
                         console.warn(`Decryption failed for message ${msg.id}:`, error.message);
-                        // Don't mark as decrypted, but store error for UI
                         return { ...msg, decryptedText: null, isDecrypted: false, decryptionError: "Decryption failed. Wrong key or corrupted." };
                     }
                 }
-                return msg; // Return unchanged if already decrypted or not decryptable
+                return msg; 
             }));
             messages = newMessages;
-            if (hasNewDecryptions || messages.length > 0) { // Re-render if new decryptions happened or if there are messages
+            if (hasNewDecryptions || messages.length > 0) { 
                  renderMessages();
             }
         };
@@ -387,7 +382,7 @@
             if (!derivedKey) { showErrorMessage("Encryption key not ready."); throw new Error("Encryption key not ready."); }
             try {
                 const enc = new TextEncoder(); const encoded = enc.encode(text);
-                const iv = window.crypto.getRandomValues(new Uint8Array(12)); // IV for AES-GCM
+                const iv = window.crypto.getRandomValues(new Uint8Array(12)); 
                 const ciphertext = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, derivedKey, encoded);
                 return { encryptedText: arrayBufferToBase64(ciphertext), iv: arrayBufferToBase64(iv) };
             } catch (error) { console.error("Encryption failed:", error); showErrorMessage("Failed to encrypt message."); throw error; }
@@ -402,17 +397,17 @@
             } catch (error) { console.error("Decryption failed:", error); throw new Error("Decryption failed. Incorrect key or corrupted message."); }
         };
         
-        // UI: Render Messages
+        // UI: Render Messages (remains unchanged from previous update logic)
         const renderMessages = () => {
-            messageArea.innerHTML = ''; // Clear previous messages
+            messageArea.innerHTML = ''; 
 
-            if (!derivedKey || !callRoomId) { // No active room (secret key not entered or invalid)
+            if (!derivedKey || !callRoomId) { 
                 initialMessageDiv.classList.remove('hidden');
                 messageArea.appendChild(initialMessageDiv);
                 return;
             }
             
-            initialMessageDiv.classList.add('hidden'); // Room is active, hide the "Enter secret key..." prompt
+            initialMessageDiv.classList.add('hidden'); 
 
             if (messages.length === 0) {
                 const noMessagesInRoomDiv = document.createElement('div');
@@ -424,7 +419,7 @@
 
             messages.forEach(msg => {
                 const messageDiv = document.createElement('div');
-                messageDiv.className = `flex ${msg.senderId === userId ? 'justify-end' : 'justify-start'} mb-2`; // Added mb-2 for spacing
+                messageDiv.className = `flex ${msg.senderId === userId ? 'justify-end' : 'justify-start'} mb-2`;
 
                 const contentDiv = document.createElement('div');
                 contentDiv.className = `max-w-[80%] p-3 rounded-xl shadow-md flex flex-col ${msg.senderId === userId ? 'bg-purple-500 text-white rounded-br-none' : 'bg-white text-gray-800 rounded-bl-none'}`;
@@ -434,20 +429,20 @@
                 senderSpan.textContent = msg.senderId === userId ? 'You' : `User: ${msg.senderId ? msg.senderId.substring(0, 8) : 'Unknown'}...`;
                 contentDiv.appendChild(senderSpan);
 
-                if (msg.type === 'media' && (msg.encryptedContent || msg.decryptedText)) { // Check for content
+                if (msg.type === 'media' && (msg.encryptedContent || msg.decryptedText)) { 
                     if (msg.isDecrypted && msg.decryptedText) {
                         let mediaElement;
                         if (msg.mediaType === 'image') { mediaElement = document.createElement('img'); mediaElement.src = msg.decryptedText; }
-                        else if (msg.mediaType === 'video') { mediaElement = document.createElement('video'); mediaElement.src = msg.decryptedText; mediaElement.controls = true; mediaElement.autoplay = false; mediaElement.playsInline = true; } // playsinline for iOS
+                        else if (msg.mediaType === 'video') { mediaElement = document.createElement('video'); mediaElement.src = msg.decryptedText; mediaElement.controls = true; mediaElement.autoplay = false; mediaElement.playsInline = true; } 
                         else if (msg.mediaType === 'audio') { mediaElement = document.createElement('audio'); mediaElement.src = msg.decryptedText; mediaElement.controls = true; }
-                        if (mediaElement) { mediaElement.className = 'max-w-xs sm:max-w-sm md:max-w-md h-auto rounded-md my-1'; contentDiv.appendChild(mediaElement); } // Responsive max-width
+                        if (mediaElement) { mediaElement.className = 'max-w-xs sm:max-w-sm md:max-w-md h-auto rounded-md my-1'; contentDiv.appendChild(mediaElement); } 
                     } else {
                         const encryptedP = document.createElement('p'); encryptedP.className = 'text-sm italic text-gray-400 break-words';
                         encryptedP.textContent = `Encrypted ${msg.mediaType || 'media'} (${msg.fileName || 'unknown'}). Waiting for key...`; 
                         contentDiv.appendChild(encryptedP);
                         if (msg.decryptionError) { const errorP = document.createElement('p'); errorP.className = 'text-xs text-red-300 mt-1'; errorP.textContent = `${msg.decryptionError}`; contentDiv.appendChild(errorP); }
                     }
-                } else if (msg.encryptedText || msg.decryptedText) { // Check for content
+                } else if (msg.encryptedText || msg.decryptedText) { 
                      if (msg.isDecrypted && msg.decryptedText) { 
                         const decryptedP = document.createElement('p'); decryptedP.className = 'text-sm break-words whitespace-pre-wrap'; decryptedP.textContent = msg.decryptedText; contentDiv.appendChild(decryptedP); 
                     } else {
@@ -466,14 +461,14 @@
             messageArea.scrollTop = messageArea.scrollHeight;
         };
 
-        // Firebase: Subscribe to Messages for a specific room
+        // Firebase: Subscribe to Messages for a specific room (remains unchanged from previous update)
         function subscribeToMessages(currentRoomId) {
             if (messagesUnsubscribe) {
-                messagesUnsubscribe(); // Unsubscribe from previous room's messages
+                messagesUnsubscribe(); 
                 messagesUnsubscribe = null;
             }
-            messages = []; // Clear local messages cache
-            renderMessages(); // Update UI (might show "no messages in room" or initial prompt if currentRoomId is null)
+            messages = []; 
+            renderMessages(); 
 
             if (!db || !currentRoomId) {
                 console.warn("DB or currentRoomId not available for message subscription.");
@@ -483,7 +478,7 @@
             const messagesPath = getMessagesColPath();
             if (!messagesPath) {
                 console.error("Messages collection path could not be determined for subscription.");
-                renderMessages(); // Ensure UI reflects no messages
+                renderMessages(); 
                 return;
             }
 
@@ -497,81 +492,55 @@
                     isDecrypted: false, 
                     decryptionError: null 
                 }));
-                // Sort messages by timestamp (client-side)
                 fetchedMessages.sort((a, b) => (a.timestamp?.toDate()?.getTime() || 0) - (b.timestamp?.toDate()?.getTime() || 0));
                 messages = fetchedMessages;
-                renderMessages(); // Re-render with new/updated messages
-                if (derivedKey) { // Attempt to decrypt if key is available
+                renderMessages(); 
+                if (derivedKey) { 
                     autoDecryptMessages();
                 }
             }, (error) => {
                 console.error("Error fetching messages for room:", currentRoomId, error);
                 showErrorMessage("Failed to fetch messages for the room.");
-                messages = []; // Clear messages on error
-                renderMessages(); // Update UI
+                messages = []; 
+                renderMessages(); 
             });
         }
         
-        // Firebase: Initialization & Auth
+        // Firebase: Initialization & Auth (Reverted to original hardcoded config)
         window.onload = async () => {
             try {
-                // Use provided __firebase_config and __app_id
-                firebaseConfigGlobal = { // <<< Assign to module-scoped variable
-                    apiKey: "AIzaSyCPmT3kxQm4nqovB1eB5tWON2GCStcSzmg", // Replace with your actual API key
+                // User's original hardcoded Firebase config
+                firebaseConfig = { 
+                    apiKey: "AIzaSyCPmT3kxQm4nqovB1eB5tWON2GCStcSzmg", 
                     authDomain: "sybau-2b8ae.firebaseapp.com",
                     projectId: "sybau-2b8ae",
-                    storageBucket: "sybau-2b8ae.appspot.com", // Or .firebasestorage.app - check your console
-                    messagingSenderId: "973974019830",      // Replace with your actual Sender ID
-                    appId: "1:973974019830:web:2dfc448a43178aea6116d7" // Replace with your actual App ID
+                    storageBucket: "sybau-2b8ae.appspot.com", 
+                    messagingSenderId: "973974019830",     
+                    appId: "1:973974019830:web:2dfc448a43178aea6116d7" 
                 };
-
-                if (!firebaseConfigGlobal) {
-                    showErrorMessage("Firebase configuration is missing. App cannot start.");
-                    console.error("Firebase configuration (__firebase_config) is not available.");
-                    return;
-                }
                 
-                app = initializeApp(firebaseConfigGlobal);
+                app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
 
-                // Handle authentication
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         userId = user.uid;
                         console.log("User is signed in with UID:", userId);
                         userIdSpan.textContent = userId; 
                         userIdDisplay.classList.remove('hidden');
-                        // Initial rendering of messages (will show "enter secret key")
-                        renderMessages(); 
+                        renderMessages(); // Initial render (will show "enter secret key" if no room yet)
                     } else {
-                        console.log("No user signed in, attempting custom/anonymous sign-in.");
-                        userId = null; // Clear userId if no user
+                        console.log("No user signed in, attempting anonymous sign-in.");
+                        userId = null; 
                         userIdDisplay.classList.add('hidden');
-                        // Attempt sign-in using __initial_auth_token or fallback to anonymous
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            try {
-                                await signInWithCustomToken(auth, __initial_auth_token);
-                                console.log("Signed in with custom token.");
-                                // onAuthStateChanged will be triggered again with the new user
-                            } catch (customTokenError) {
-                                console.error("Custom token sign-in failed, trying anonymous:", customTokenError);
-                                try {
-                                    await signInAnonymously(auth);
-                                    console.log("Signed in anonymously after custom token failure.");
-                                } catch (anonError) {
-                                    console.error("Anonymous sign-in failed:", anonError);
-                                    showErrorMessage("Authentication failed. Please refresh.");
-                                }
-                            }
-                        } else {
-                            try {
-                                await signInAnonymously(auth);
-                                console.log("Signed in anonymously (no custom token provided).");
-                            } catch (anonError) {
-                                console.error("Anonymous sign-in failed:", anonError);
-                                showErrorMessage("Authentication failed. Please refresh.");
-                            }
+                        try {
+                            await signInAnonymously(auth);
+                            console.log("Signed in anonymously.");
+                            // onAuthStateChanged will be triggered again with the new user
+                        } catch (anonError) {
+                            console.error("Anonymous sign-in failed:", anonError);
+                            showErrorMessage("Authentication failed. Please refresh.");
                         }
                     }
                 });
@@ -581,9 +550,9 @@
             }
         };
         
-        // Presence System
+        // Presence System (remains unchanged from previous update logic)
         const updatePresence = async () => {
-            if (db && userId && callRoomId) { // Only update if in a room
+            if (db && userId && callRoomId) { 
                 const path = getPresenceDocPath(userId);
                 if (path) {
                     try {
@@ -596,17 +565,16 @@
         };
         const startPresenceUpdates = () => { 
             if (presenceInterval) clearInterval(presenceInterval); 
-            updatePresence(); // Initial update
-            presenceInterval = setInterval(updatePresence, 20000); // Update every 20 seconds
+            updatePresence(); 
+            presenceInterval = setInterval(updatePresence, 20000); 
         };
         const stopPresenceUpdates = () => {
             if (presenceInterval) { clearInterval(presenceInterval); presenceInterval = null; }
-            // No need to delete presence doc on stopping, as it's filtered by lastSeen and roomId
         };
 
         const updatePresenceUI = (activeUserIds) => {
             connectedUsersList.innerHTML = '';
-            if (!callRoomId) { // If not in a room, show default
+            if (!callRoomId) { 
                  connectedUsersList.innerHTML = '<span class="text-gray-400 italic">Enter secret key to see users...</span>';
                  startAudioCallButton.disabled = true; startVideoCallButton.disabled = true;
                  return;
@@ -617,7 +585,7 @@
             } else {
                 activeUserIds.forEach(id => {    
                     const userSpan = document.createElement('span');
-                    userSpan.className = `bg-purple-200 text-purple-800 px-2 py-1 rounded-full text-xs ${id === userId ? 'font-bold ring-2 ring-purple-500' : ''}`; // Highlight self
+                    userSpan.className = `bg-purple-200 text-purple-800 px-2 py-1 rounded-full text-xs ${id === userId ? 'font-bold ring-2 ring-purple-500' : ''}`; 
                     userSpan.textContent = id === userId ? 'You (Online)' : `User: ${id.substring(0, 8)}...`;
                     connectedUsersList.appendChild(userSpan);
                 });
@@ -636,10 +604,10 @@
 
             const q = query(collection(db, presencePath), where("roomId", "==", currentRoomId));
             presenceUnsubscribe = onSnapshot(q, (snapshot) => {
-                if (!callRoomId || callRoomId !== currentRoomId) return; // Stale listener check
+                if (!callRoomId || callRoomId !== currentRoomId) return; 
                 const now = Date.now();
                 const activeUsers = snapshot.docs
-                    .filter(d => d.data().lastSeen && (now - d.data().lastSeen.toDate().getTime() < 60000)) // Active within last 60 seconds
+                    .filter(d => d.data().lastSeen && (now - d.data().lastSeen.toDate().getTime() < 60000)) 
                     .map(d => d.id);
                 updatePresenceUI(activeUsers);
             }, (error) => { 
@@ -649,7 +617,7 @@
             });
         }
         
-        // WebRTC Call Logic (Largely unchanged, focus on button integration)
+        // WebRTC Call Logic (remains unchanged from previous update logic)
         function initializeCallListeners(currentCallRoomId) {
             if (callStateUnsubscribe) callStateUnsubscribe();
             if (candidatesUnsubscribe) candidatesUnsubscribe();
@@ -661,14 +629,14 @@
             const callStateRef = doc(db, callDocP);
 
             callStateUnsubscribe = onSnapshot(callStateRef, async (docSnap) => {
-                if (!callRoomId || callRoomId !== currentCallRoomId) return; // Stale listener check
+                if (!callRoomId || callRoomId !== currentCallRoomId) return; 
 
                 if (!docSnap.exists()) {
-                    if (peerConnection) endCall(false); // Pass false if call doc deleted (likely by other party)
+                    if (peerConnection) endCall(false); 
                     callStatus.textContent = 'Call has ended or does not exist.';
                     startAudioCallButton.classList.remove('hidden'); startVideoCallButton.classList.remove('hidden');
                     joinCallButton.classList.add('hidden'); hangUpButton.classList.add('hidden');
-                    if (!messageArea.classList.contains('hidden')) { // Only switch if video was visible
+                    if (!messageArea.classList.contains('hidden')) { 
                          videoCallArea.classList.add('hidden'); messageArea.classList.remove('hidden');
                          toggleViewButton.innerHTML = '<i class="fas fa-video"></i> <span class="hidden sm:inline">Call</span>';
                     }
@@ -681,7 +649,7 @@
                     startAudioCallButton.classList.add('hidden'); startVideoCallButton.classList.add('hidden');
                     joinCallButton.classList.remove('hidden'); hangUpButton.classList.add('hidden');
                     callStatus.textContent = `${data.status === 'ringing' ? 'Incoming' : ''} ${currentCallType} call...`;
-                    if(messageArea.classList.contains('hidden')) { // If already in call view, don't flip
+                    if(messageArea.classList.contains('hidden')) { 
                         // no op
                     } else {
                         videoCallArea.classList.remove('hidden'); messageArea.classList.add('hidden');
@@ -734,14 +702,14 @@
                     remoteMicStatus.classList.toggle('fa-microphone-slash', !data.trackStatus.audio);
                     remoteCamStatus.classList.toggle('fa-video', data.trackStatus.video);
                     remoteCamStatus.classList.toggle('fa-video-slash', !data.trackStatus.video);
-                    remoteVideoOverlay.classList.toggle('hidden', data.trackStatus.video); // Show overlay if remote video is off
+                    remoteVideoOverlay.classList.toggle('hidden', data.trackStatus.video); 
                 }
             }, (error) => { console.error("Call state listener error:", error); showErrorMessage("Call connection error."); });
 
             const candidatesPath = getCallCandidatesColPath(currentCallRoomId);
             if (candidatesPath) {
                 candidatesUnsubscribe = onSnapshot(query(collection(db, candidatesPath)), (snapshot) => {
-                    if (!callRoomId || callRoomId !== currentCallRoomId) return; // Stale listener check
+                    if (!callRoomId || callRoomId !== currentCallRoomId) return; 
                     snapshot.docChanges().forEach(async (change) => {
                         if (change.type === 'added' && peerConnection) {
                             const candidateData = change.doc.data();
@@ -750,7 +718,7 @@
                                     await peerConnection.addIceCandidate(new RTCIceCandidate(candidateData.candidate)); 
                                     console.log("Added remote ICE candidate");
                                 }    
-                                catch (e) { console.warn('Error adding received ICE candidate:', e.message); } // Warn instead of error for minor issues
+                                catch (e) { console.warn('Error adding received ICE candidate:', e.message); } 
                             }
                         }
                     });
@@ -825,7 +793,6 @@
                 if (currentCameraDeviceId && callType === 'video' && videoConstraint) {
                     videoConstraint.deviceId = { exact: currentCameraDeviceId };
                 }
-                // Stop previous stream if exists
                 if (localStream) {
                     localStream.getTracks().forEach(track => track.stop());
                 }
@@ -845,8 +812,8 @@
 
                 isVideoActive = callType === 'video' && localStream.getVideoTracks().some(t => t.enabled);
                 isAudioActive = localStream.getAudioTracks().some(t => t.enabled);
-                updateLocalTrackStatusUI(); // Update UI for local controls
-                await updateLocalTrackStatus(); // Send to remote
+                updateLocalTrackStatusUI(); 
+                await updateLocalTrackStatus(); 
                 toggleVideoButton.style.display = callType === 'video' ? 'flex' : 'none';
                 switchCamButton.style.display = callType === 'video' ? 'flex' : 'none';
 
@@ -859,8 +826,8 @@
             }
         };
 
-        const updateLocalTrackStatus = async () => { // For Firestore
-            if (db && callRoomId && userId && peerConnection) { // Ensure call is active
+        const updateLocalTrackStatus = async () => { 
+            if (db && callRoomId && userId && peerConnection) { 
                 const path = getCallDocPath(callRoomId);
                 if (path) {
                     try {
@@ -872,7 +839,7 @@
             }
         };
         
-        const updateLocalTrackStatusUI = () => { // For local buttons
+        const updateLocalTrackStatusUI = () => { 
             toggleMicButton.innerHTML = isAudioActive ? '<i class="fas fa-microphone"></i> <span class="hidden sm:inline">Mic</span>' : '<i class="fas fa-microphone-slash text-red-500"></i> <span class="hidden sm:inline">Mic</span>';
             if (currentCallType === 'video') {
                 toggleVideoButton.innerHTML = isVideoActive ? '<i class="fas fa-video"></i> <span class="hidden sm:inline">Video</span>' : '<i class="fas fa-video-slash text-red-500"></i> <span class="hidden sm:inline">Video</span>';
@@ -910,7 +877,7 @@
             } catch (error) {    
                 console.error("Error during call initiation (setup or offer):", error);
                 showErrorMessage(error.message || "Failed to start call.");
-                endCall(true); // Cleanup on error
+                endCall(true); 
             }
         };
 
@@ -936,12 +903,11 @@
                 if (!peerConnection) {
                     throw new Error('Failed to initialize call connection for joining.');
                 }
-                // Offer/Answer exchange will be handled by initializeCallListeners via Firestore
                 console.log("Peer connection set up for joining call. Waiting for signaling via Firestore.");
             } catch (error) {
                 console.error("Error during join call (setup or getDoc):", error);
                 showErrorMessage(error.message || "Failed to join call.");
-                endCall(true); // Cleanup
+                endCall(true); 
             }
         };
 
@@ -951,7 +917,6 @@
             if (remoteVideo.srcObject) { remoteVideo.srcObject.getTracks().forEach(t => t.stop()); remoteVideo.srcObject = null; }
             
             if (peerConnection) { 
-                // Remove tracks before closing to avoid issues
                 peerConnection.getSenders().forEach(sender => {
                     if (sender.track) {
                         try { peerConnection.removeTrack(sender); } catch(e) { console.warn("Error removing track:", e); }
@@ -983,16 +948,15 @@
             startAudioCallButton.classList.remove('hidden'); startVideoCallButton.classList.remove('hidden');
             joinCallButton.classList.add('hidden'); hangUpButton.classList.add('hidden');
             callStatus.textContent = '';
-            isVideoActive = true; isAudioActive = true; // Reset states
-            updateLocalTrackStatusUI(); // Reset button UI
+            isVideoActive = true; isAudioActive = true; 
+            updateLocalTrackStatusUI(); 
             toggleViewButton.innerHTML = '<i class="fas fa-video"></i> <span class="hidden sm:inline">Call</span>';
-            remoteVideoOverlay.classList.add('hidden'); // Hide remote status overlay
+            remoteVideoOverlay.classList.add('hidden'); 
 
-            // Re-check presence for call buttons enablement
             if(callRoomId) subscribeToPresence(callRoomId); else updatePresenceUI([]);
         };
 
-        // Call UI Controls - IMPLEMENTED
+        // Call UI Controls (remains unchanged from previous update)
         const toggleLocalMic = async () => {
             if (!localStream || !peerConnection) return;
             const audioTrack = localStream.getAudioTracks()[0];
@@ -1000,7 +964,7 @@
                 audioTrack.enabled = !audioTrack.enabled;
                 isAudioActive = audioTrack.enabled;
                 updateLocalTrackStatusUI();
-                await updateLocalTrackStatus(); // Notify remote peer
+                await updateLocalTrackStatus(); 
             }
         };
 
@@ -1011,7 +975,7 @@
                 videoTrack.enabled = !videoTrack.enabled;
                 isVideoActive = videoTrack.enabled;
                 updateLocalTrackStatusUI();
-                await updateLocalTrackStatus(); // Notify remote peer
+                await updateLocalTrackStatus(); 
             }
         };
 
@@ -1032,31 +996,27 @@
                 currentCameraDeviceId = currentVideoTrack.getSettings().deviceId;
                 
                 let nextDeviceId = videoDevices.find(device => device.deviceId !== currentCameraDeviceId)?.deviceId;
-                if (!nextDeviceId && videoDevices.length > 0) nextDeviceId = videoDevices[0].deviceId; // Fallback to first if logic fails
+                if (!nextDeviceId && videoDevices.length > 0) nextDeviceId = videoDevices[0].deviceId; 
 
                 if (!nextDeviceId || nextDeviceId === currentCameraDeviceId) {
                      showErrorMessage("Could not determine next camera."); return;
                 }
 
-                // Stop current video track
                 currentVideoTrack.stop();
 
-                // Get new stream with the new camera
                 const newConstraints = { 
                     video: { deviceId: { exact: nextDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }, 
-                    audio: false // We only want to replace the video track
+                    audio: false 
                 }; 
                 const newVideoStream = await navigator.mediaDevices.getUserMedia(newConstraints);
                 const newVideoTrack = newVideoStream.getVideoTracks()[0];
 
-                // Replace track in localStream (for localVideo display)
                 localStream.removeTrack(currentVideoTrack);
                 localStream.addTrack(newVideoTrack);
-                localVideo.srcObject = null; // Force re-render
+                localVideo.srcObject = null; 
                 localVideo.srcObject = localStream; 
                 currentCameraDeviceId = newVideoTrack.getSettings().deviceId;
 
-                // Replace track in PeerConnection
                 const videoSender = peerConnection.getSenders().find(sender => sender.track && sender.track.kind === 'video');
                 if (videoSender) {
                     await videoSender.replaceTrack(newVideoTrack);
@@ -1064,15 +1024,14 @@
                 } else {
                     console.error("Could not find video sender to replace track.");
                 }
-                isVideoActive = true; // Assume video is active after switch
+                isVideoActive = true; 
                 updateLocalTrackStatusUI();
                 await updateLocalTrackStatus();
 
             } catch (error) {
                 console.error("Error switching camera:", error);
                 showErrorMessage("Failed to switch camera: " + error.message);
-                // Attempt to restore original stream if possible, or re-setup
-                await setupPeerConnection(currentCallType); // Fallback: re-setup with default cam
+                await setupPeerConnection(currentCallType); 
             }
         };
         
@@ -1099,8 +1058,8 @@
 
         const toggleChatCallView = () => {
             const isChatVisible = !messageArea.classList.contains('hidden');
-            if (isChatVisible) { // Switch to call view
-                if (!peerConnection && !joinCallButton.classList.contains('hidden')) { // If there's an incoming call offer
+            if (isChatVisible) { 
+                if (!peerConnection && !joinCallButton.classList.contains('hidden')) { 
                     // Show call view for joining
                 } else if (!peerConnection) {
                     showErrorMessage("No active call to switch to. Start or join a call.");
@@ -1109,14 +1068,14 @@
                 videoCallArea.classList.remove('hidden');
                 messageArea.classList.add('hidden');
                 toggleViewButton.innerHTML = '<i class="fas fa-comments"></i> <span class="hidden sm:inline">Chat</span>';
-            } else { // Switch to chat view
+            } else { 
                 videoCallArea.classList.add('hidden');
                 messageArea.classList.remove('hidden');
                 toggleViewButton.innerHTML = '<i class="fas fa-video"></i> <span class="hidden sm:inline">Call</span>';
             }
         };
 
-        // Event Listeners Setup
+        // Event Listeners Setup (remains unchanged from previous update)
         verifyKeyButton.addEventListener('click', () => { 
             deriveEncryptionKey(sharedSecretInput.value); 
             keyWarningDiv.classList.add('hidden'); 
@@ -1128,7 +1087,7 @@
             if (!messageText || !db || !userId || !derivedKey || !callRoomId) { showErrorMessage("Enter secret & message, and ensure you are in a room."); return; }
             try {
                 const { encryptedText, iv } = await encryptMessage(messageText);
-                const messageData = { senderId: userId, encryptedText, iv, timestamp: serverTimestamp(), type: 'text', roomId: callRoomId }; // Add roomId
+                const messageData = { senderId: userId, encryptedText, iv, timestamp: serverTimestamp(), type: 'text', roomId: callRoomId }; 
                 const path = getMessagesColPath();
                 if (path) await addDoc(collection(db, path), messageData);
                 else console.error("Cannot send message, path is null.");
@@ -1139,24 +1098,24 @@
         mediaInput.addEventListener('change', async (e) => {
             const file = e.target.files[0]; if (!file) return;
             if (!db || !userId || !derivedKey || !callRoomId) { showErrorMessage("Enter secret key for media and ensure you are in a room."); e.target.value = ''; return; }
-            if (file.size > 5 * 1024 * 1024) { showErrorMessage("File > 5MB. Choose smaller."); e.target.value = ''; return; } // Increased limit slightly
+            if (file.size > 5 * 1024 * 1024) { showErrorMessage("File > 5MB. Choose smaller."); e.target.value = ''; return; } 
             
-            const uploadingMsg = showErrorMessage("Uploading & encrypting media..."); // Keep reference to hide later
+            const uploadingMsg = showErrorMessage("Uploading & encrypting media..."); 
             
             const reader = new FileReader();
             reader.onload = async (event) => {
                 try {
-                    const { encryptedText, iv } = await encryptMessage(event.target.result); // event.target.result is base64 data URL
-                    const messageData = { senderId: userId, encryptedContent: encryptedText, iv, timestamp: serverTimestamp(), type: 'media', mediaType: file.type.split('/')[0], fileName: file.name, roomId: callRoomId }; // Add roomId
+                    const { encryptedText, iv } = await encryptMessage(event.target.result); 
+                    const messageData = { senderId: userId, encryptedContent: encryptedText, iv, timestamp: serverTimestamp(), type: 'media', mediaType: file.type.split('/')[0], fileName: file.name, roomId: callRoomId }; 
                     const path = getMessagesColPath();
                     if (path) await addDoc(collection(db, path), messageData);
                     else console.error("Cannot send media, path is null.");
-                    hideErrorMessage(); e.target.value = ''; // Clear file input
+                    hideErrorMessage(); e.target.value = ''; 
                 } catch (error) { console.error("Share media error:", error); showErrorMessage("Failed to share media. " + error.message); }
             };
             reader.onerror = () => {
                 showErrorMessage("Error reading file for media sharing.");
-                hideErrorMessage(); // Hide the "uploading" message
+                hideErrorMessage(); 
                 e.target.value = '';
             };
             reader.readAsDataURL(file);
@@ -1165,7 +1124,7 @@
         startAudioCallButton.addEventListener('click', () => startCall('audio'));
         startVideoCallButton.addEventListener('click', () => startCall('video'));
         joinCallButton.addEventListener('click', joinExistingCall);
-        hangUpButton.addEventListener('click', () => endCall(true)); // true for initiator of hangup
+        hangUpButton.addEventListener('click', () => endCall(true)); 
         
         toggleMicButton.addEventListener('click', toggleLocalMic);
         toggleVideoButton.addEventListener('click', toggleLocalVideo);
@@ -1175,8 +1134,6 @@
         
         window.addEventListener('beforeunload', () => { 
             stopPresenceUpdates(); 
-            // Consider ending call if active, though this can be abrupt
-            // if (peerConnection) endCall(true); 
         });
 
     </script>
